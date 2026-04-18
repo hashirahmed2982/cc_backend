@@ -65,26 +65,7 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
--- 3. VIEWER ACCOUNTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS viewer_accounts (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    viewer_user_id INT NOT NULL,
-    b2b_client_id INT NOT NULL,
-    permissions JSON NULL,
-    created_by INT NULL,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (viewer_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (b2b_client_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
-    UNIQUE KEY unique_viewer_client (viewer_user_id, b2b_client_id),
-    INDEX idx_viewer_user_id (viewer_user_id),
-    INDEX idx_b2b_client_id (b2b_client_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ============================================
--- 4. SESSIONS TABLE
+-- 3. SESSIONS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS sessions (
     session_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -103,46 +84,48 @@ CREATE TABLE IF NOT EXISTS sessions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
--- 5. WALLETS TABLE
+-- 4. EMAIL VERIFICATION TOKENS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    token VARCHAR(255) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    UNIQUE INDEX idx_token (token),
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- 5. PASSWORD RESET TOKENS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    token VARCHAR(255) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    UNIQUE INDEX idx_token (token),
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- 6. WALLETS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS wallets (
     wallet_id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL UNIQUE,
     balance DECIMAL(15,2) NOT NULL DEFAULT 0.00,
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
-    status ENUM('active','frozen','closed') NOT NULL DEFAULT 'active',
+    status ENUM('active', 'suspended', 'closed') NOT NULL DEFAULT 'active',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     INDEX idx_user_id (user_id),
     CONSTRAINT chk_balance CHECK (balance >= 0)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ============================================
--- 6. TOPUP REQUESTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS topup_requests (
-    request_id    INT PRIMARY KEY AUTO_INCREMENT,
-    user_id       INT NOT NULL,
-    wallet_id     INT NOT NULL,
-    amount        DECIMAL(15,2) NOT NULL,
-    currency      VARCHAR(3) NOT NULL DEFAULT 'USD',
-    receipt_url   VARCHAR(1000) NULL COMMENT 'Uploaded receipt image/PDF',
-    status        ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
-    rejection_reason TEXT NULL,
-    reviewed_by   INT NULL,
-    reviewed_at   DATETIME NULL,
-    notes         TEXT NULL,
-    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id)     REFERENCES users(user_id)    ON DELETE CASCADE,
-    FOREIGN KEY (wallet_id)   REFERENCES wallets(wallet_id) ON DELETE CASCADE,
-    FOREIGN KEY (reviewed_by) REFERENCES users(user_id)    ON DELETE SET NULL,
-    INDEX idx_user_id    (user_id),
-    INDEX idx_wallet_id  (wallet_id),
-    INDEX idx_status     (status),
-    INDEX idx_created_at (created_at),
-    CONSTRAINT chk_topup_amount CHECK (amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -152,7 +135,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
     transaction_id INT PRIMARY KEY AUTO_INCREMENT,
     wallet_id INT NOT NULL,
     user_id INT NOT NULL,
-    transaction_type ENUM('credit','debit') NOT NULL,
+    transaction_type ENUM('credit', 'debit') NOT NULL,
     amount DECIMAL(15,2) NOT NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     balance_before DECIMAL(15,2) NOT NULL,
@@ -164,14 +147,13 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
     payment_ref VARCHAR(255) NULL,
     processed_by INT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id)    REFERENCES wallets(wallet_id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id)      REFERENCES users(user_id)     ON DELETE CASCADE,
-    FOREIGN KEY (processed_by) REFERENCES users(user_id)     ON DELETE SET NULL,
-    INDEX idx_wallet_id      (wallet_id),
-    INDEX idx_user_id        (user_id),
-    INDEX idx_reference_type (reference_type),
-    INDEX idx_created_at     (created_at),
-    CONSTRAINT chk_txn_amount CHECK (amount > 0)
+    FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (processed_by) REFERENCES users(user_id) ON DELETE SET NULL,
+    INDEX idx_wallet_id (wallet_id),
+    INDEX idx_user_id (user_id),
+    INDEX idx_created_at (created_at),
+    INDEX idx_reference (reference_type, reference_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -184,32 +166,25 @@ CREATE TABLE IF NOT EXISTS products (
     brand_name VARCHAR(255) NULL,
     description TEXT NULL,
     category VARCHAR(100) NULL,
-    product_type ENUM('game','gift_card','subscription','other') NOT NULL DEFAULT 'gift_card',
+    product_type ENUM('game', 'gift_card', 'subscription', 'other') NOT NULL DEFAULT 'gift_card',
     spu_type INT NULL,
     region VARCHAR(50) NULL,
     currency_code VARCHAR(3) NOT NULL DEFAULT 'USD',
     image_url VARCHAR(500) NULL,
     how_exchange TEXT NULL COMMENT 'Redemption instructions',
-    is_active BOOLEAN NOT NULL DEFAULT FALSE,
-    source ENUM('internal','carrypin') NOT NULL DEFAULT 'internal',
-    supplier_name   VARCHAR(100) NULL  COMMENT 'e.g. carrypin',
-    supplier_ref    VARCHAR(100) NULL  COMMENT 'Supplier SPU/product ID',
-    sync_enabled    BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Auto-sync price/stock',
-    last_synced_at  DATETIME NULL COMMENT 'Last supplier sync',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    source ENUM('internal', 'carrypin') NOT NULL DEFAULT 'internal',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     created_by INT NULL,
     updated_by INT NULL,
     FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
     FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE SET NULL,
-    INDEX idx_spu_id       (spu_id),
-    INDEX idx_category     (category),
-    INDEX idx_is_active    (is_active),
+    INDEX idx_spu_id (spu_id),
+    INDEX idx_category (category),
+    INDEX idx_is_active (is_active),
     INDEX idx_product_name (product_name),
-    INDEX idx_brand_name   (brand_name),
-    INDEX idx_source       (source),
-    INDEX idx_supplier_name(supplier_name),
-    INDEX idx_supplier_ref (supplier_ref)
+    INDEX idx_brand_name (brand_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -219,9 +194,6 @@ CREATE TABLE IF NOT EXISTS product_skus (
     sku_id INT PRIMARY KEY AUTO_INCREMENT,
     product_id INT NOT NULL,
     carrypin_sku_id VARCHAR(100) NULL COMMENT 'CarryPin SKU ID',
-    supplier_sku_ref VARCHAR(100) NULL COMMENT 'Supplier SKU/denomination ID',
-    realtime_price BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Fetch price live from supplier',
-    face_value_display VARCHAR(50) NULL COMMENT 'Display label e.g. $50',
     sku_name VARCHAR(255) NOT NULL,
     face_value DECIMAL(10,2) NULL COMMENT 'Denomination',
     is_custom_value BOOLEAN NOT NULL DEFAULT FALSE,
@@ -235,9 +207,10 @@ CREATE TABLE IF NOT EXISTS product_skus (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
-    INDEX idx_product_id       (product_id),
-    INDEX idx_carrypin_sku_id  (carrypin_sku_id),
-    INDEX idx_supplier_sku_ref (supplier_sku_ref)
+    INDEX idx_product_id (product_id),
+    INDEX idx_carrypin_sku_id (carrypin_sku_id),
+    INDEX idx_is_active (is_active),
+    CONSTRAINT chk_prices CHECK (selling_price >= cost_price)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -267,19 +240,19 @@ CREATE TABLE IF NOT EXISTS digital_codes (
     code VARCHAR(500) NOT NULL COMMENT 'ENCRYPTED',
     pin_code VARCHAR(255) NULL COMMENT 'ENCRYPTED',
     sn_code VARCHAR(255) NULL COMMENT 'ENCRYPTED',
-    status ENUM('available','reserved','sold','invalid') NOT NULL DEFAULT 'available',
+    status ENUM('available', 'reserved', 'sold', 'invalid') NOT NULL DEFAULT 'available',
     order_id INT NULL,
     reserved_at DATETIME NULL,
     sold_at DATETIME NULL,
-    source ENUM('manual','excel_upload','carrypin_api') NOT NULL DEFAULT 'manual',
+    source ENUM('manual', 'excel_upload', 'carrypin_api') NOT NULL DEFAULT 'manual',
     upload_batch VARCHAR(100) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by INT NULL,
     FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
-    UNIQUE KEY uq_sku_code (sku_id, code(255)),
-    INDEX idx_sku_id       (sku_id),
-    INDEX idx_status       (status),
+    INDEX idx_sku_id (sku_id),
+    INDEX idx_status (status),
+    INDEX idx_order_id (order_id),
     INDEX idx_upload_batch (upload_batch)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -292,22 +265,22 @@ CREATE TABLE IF NOT EXISTS orders (
     user_id INT NOT NULL,
     service_order VARCHAR(100) NULL COMMENT 'Client reference',
     carrypin_order_id VARCHAR(100) NULL COMMENT 'Supplier reference',
-    order_status ENUM('pending','processing','completed','failed','cancelled') NOT NULL DEFAULT 'pending',
-    delivery_status ENUM('pending','partial','completed','failed') NOT NULL DEFAULT 'pending',
+    order_status ENUM('pending', 'processing', 'completed', 'failed', 'cancelled') NOT NULL DEFAULT 'pending',
+    delivery_status ENUM('pending', 'partial', 'completed', 'failed') NOT NULL DEFAULT 'pending',
     total_amount DECIMAL(15,2) NOT NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     payment_method VARCHAR(50) NOT NULL DEFAULT 'wallet',
-    order_source ENUM('portal','api') NOT NULL DEFAULT 'portal',
+    order_source ENUM('portal', 'api') NOT NULL DEFAULT 'portal',
     notes TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     completed_at DATETIME NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    INDEX idx_order_number    (order_number),
-    INDEX idx_user_id         (user_id),
-    INDEX idx_order_status    (order_status),
-    INDEX idx_carrypin_order  (carrypin_order_id),
-    INDEX idx_created_at      (created_at),
+    INDEX idx_order_number (order_number),
+    INDEX idx_user_id (user_id),
+    INDEX idx_order_status (order_status),
+    INDEX idx_carrypin_order_id (carrypin_order_id),
+    INDEX idx_created_at (created_at),
     CONSTRAINT chk_amount CHECK (total_amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -329,14 +302,14 @@ CREATE TABLE IF NOT EXISTS order_details (
     discount_percent DECIMAL(5,2) NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     delivered_qty INT NOT NULL DEFAULT 0,
-    delivery_status ENUM('pending','partial','completed','failed') NOT NULL DEFAULT 'pending',
+    delivery_status ENUM('pending', 'partial', 'completed', 'failed') NOT NULL DEFAULT 'pending',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (order_id)   REFERENCES orders(order_id)       ON DELETE CASCADE,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(product_id),
-    FOREIGN KEY (sku_id)     REFERENCES product_skus(sku_id),
-    INDEX idx_order_id   (order_id),
+    FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id),
+    INDEX idx_order_id (order_id),
     INDEX idx_product_id (product_id),
-    INDEX idx_sku_id     (sku_id)
+    INDEX idx_sku_id (sku_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -352,12 +325,30 @@ CREATE TABLE IF NOT EXISTS client_pricing (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     created_by INT NULL COMMENT 'Admin user',
-    FOREIGN KEY (user_id)     REFERENCES users(user_id)        ON DELETE CASCADE,
-    FOREIGN KEY (sku_id)      REFERENCES product_skus(sku_id)  ON DELETE CASCADE,
-    FOREIGN KEY (created_by)  REFERENCES users(user_id)        ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
     UNIQUE KEY unique_user_sku (user_id, sku_id),
-    INDEX idx_user_id   (user_id),
-    INDEX idx_sku_id    (sku_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_sku_id (sku_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- 002_viewer_accounts.sql
+CREATE TABLE IF NOT EXISTS viewer_accounts (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    viewer_user_id INT NOT NULL,        -- the viewer user
+    b2b_client_id INT NOT NULL,         -- the b2b account they belong to
+    permissions JSON NULL,              -- optional granular permissions
+    created_by INT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (viewer_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (b2b_client_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
+
+    UNIQUE KEY unique_viewer_client (viewer_user_id, b2b_client_id),
+    INDEX idx_viewer_user_id (viewer_user_id),
+    INDEX idx_b2b_client_id (b2b_client_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -367,14 +358,14 @@ CREATE TABLE IF NOT EXISTS client_product_access (
     access_id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL,
     product_id INT NOT NULL,
-    access_type ENUM('allow','deny') NOT NULL DEFAULT 'allow',
+    access_type ENUM('allow', 'deny') NOT NULL DEFAULT 'allow',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by INT NULL COMMENT 'Admin user',
-    FOREIGN KEY (user_id)    REFERENCES users(user_id)    ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
-    FOREIGN KEY (created_by) REFERENCES users(user_id)    ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
     UNIQUE KEY unique_user_product (user_id, product_id),
-    INDEX idx_user_id    (user_id),
+    INDEX idx_user_id (user_id),
     INDEX idx_product_id (product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -426,95 +417,146 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 -- 18. API LOGS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS api_logs (
-    log_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    api_log_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NULL,
-    method VARCHAR(10) NOT NULL,
     endpoint VARCHAR(255) NOT NULL,
-    status_code INT NULL,
-    response_time INT NULL COMMENT 'Milliseconds',
-    request_body JSON NULL,
+    method VARCHAR(10) NOT NULL,
+    request_body TEXT NULL COMMENT 'ENCRYPTED',
+    response_body TEXT NULL COMMENT 'ENCRYPTED',
+    status_code INT NOT NULL,
+    response_time INT NOT NULL COMMENT 'milliseconds',
+    ip_address VARCHAR(50) NULL,
+    carrypin_request TEXT NULL,
+    carrypin_response TEXT NULL,
     error_message TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL,
-    INDEX idx_user_id     (user_id),
-    INDEX idx_endpoint    (endpoint),
+    INDEX idx_user_id (user_id),
+    INDEX idx_endpoint (endpoint),
     INDEX idx_status_code (status_code),
-    INDEX idx_created_at  (created_at)
+    INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
 -- 19. SUPPORT TICKETS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS support_tickets (
-    ticket_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,
-    ticket_number VARCHAR(20) NOT NULL UNIQUE,
-    title VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
+    ticket_id       INT PRIMARY KEY AUTO_INCREMENT,
+    user_id         INT NOT NULL,
+    ticket_number   VARCHAR(20) NOT NULL UNIQUE,
+    title           VARCHAR(255) NOT NULL,
+    description     TEXT NOT NULL,
     attachment_name VARCHAR(255) NULL,
-    attachment_url VARCHAR(500) NULL,
-    status ENUM('pending','in_progress','resolved') NOT NULL DEFAULT 'pending',
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    attachment_url  VARCHAR(500) NULL,
+    status          ENUM('pending', 'in_progress', 'resolved') NOT NULL DEFAULT 'pending',
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     INDEX idx_user_id  (user_id),
     INDEX idx_status   (status),
     INDEX idx_created  (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ============================================
--- 4. EMAIL VERIFICATION TOKENS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS email_verification_tokens (
+CREATE TABLE IF NOT EXISTS viewer_accounts (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,
-    token VARCHAR(255) NOT NULL,
-    expires_at DATETIME NOT NULL,
+    viewer_user_id INT NOT NULL,        -- the viewer user
+    b2b_client_id INT NOT NULL,         -- the b2b account they belong to
+    permissions JSON NULL,              -- optional granular permissions
+    created_by INT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    UNIQUE INDEX idx_token (token),
-    INDEX idx_user_id (user_id)
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (viewer_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (b2b_client_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
+
+    UNIQUE KEY unique_viewer_client (viewer_user_id, b2b_client_id),
+    INDEX idx_viewer_user_id (viewer_user_id),
+    INDEX idx_b2b_client_id (b2b_client_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ============================================
--- 5. PASSWORD RESET TOKENS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS password_reset_tokens (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,
-    token VARCHAR(255) NOT NULL,
-    expires_at DATETIME NOT NULL,
-    used BOOLEAN DEFAULT FALSE,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    UNIQUE INDEX idx_token (token),
-    INDEX idx_user_id (user_id)
+CREATE TABLE IF NOT EXISTS topup_requests (
+    request_id    INT PRIMARY KEY AUTO_INCREMENT,
+    user_id       INT NOT NULL,
+    wallet_id     INT NOT NULL,
+    amount        DECIMAL(15,2) NOT NULL,
+    currency      VARCHAR(3) NOT NULL DEFAULT 'USD',
+    receipt_url   VARCHAR(1000) NULL COMMENT 'Uploaded receipt image/PDF URL',
+    status        ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+    rejection_reason TEXT NULL,
+    reviewed_by   INT NULL,
+    reviewed_at   DATETIME NULL,
+    notes         TEXT NULL,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id)    REFERENCES users(user_id)   ON DELETE CASCADE,
+    FOREIGN KEY (wallet_id)  REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+    FOREIGN KEY (reviewed_by) REFERENCES users(user_id)  ON DELETE SET NULL,
+
+    INDEX idx_user_id   (user_id),
+    INDEX idx_wallet_id (wallet_id),
+    INDEX idx_status    (status),
+    INDEX idx_created_at(created_at),
+    CONSTRAINT chk_topup_amount CHECK (amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE products
+  ADD COLUMN supplier_name   VARCHAR(100)  NULL  COMMENT 'e.g. carrypin'              AFTER source,
+  ADD COLUMN supplier_ref    VARCHAR(100)  NULL  COMMENT 'Supplier SPU/product ID'    AFTER supplier_name,
+  ADD COLUMN sync_enabled    BOOLEAN       NOT NULL DEFAULT FALSE
+                                                   COMMENT 'Auto-sync price/stock'    AFTER supplier_ref,
+  ADD COLUMN last_synced_at  DATETIME      NULL   COMMENT 'Last supplier sync'        AFTER sync_enabled;
+
+-- ─── 2. Add supplier fields to product_skus table ────────────────────────────
+ALTER TABLE product_skus
+  ADD COLUMN supplier_sku_ref   VARCHAR(100) NULL COMMENT 'Supplier SKU/denomination ID' AFTER carrypin_sku_id,
+  ADD COLUMN realtime_price     BOOLEAN      NOT NULL DEFAULT FALSE
+                                                      COMMENT 'Fetch price live from supplier' AFTER supplier_sku_ref,
+  ADD COLUMN face_value_display VARCHAR(50)  NULL COMMENT 'Display label e.g. $50'    AFTER realtime_price;
+
+-- ─── 3. Add source flag to digital_codes (already has source col) ─────────────
+-- digital_codes.source already supports: 'manual','excel_upload','carrypin_api' ✓
+
+-- ─── 4. inventory.unlimited_stock already exists ──────────────────────────────
+-- When source='carrypin': unlimited_stock=TRUE, stock_quantity not tracked ✓
+
+-- ─── 5. Add index for supplier lookups ────────────────────────────────────────
+ALTER TABLE products
+  ADD INDEX idx_source         (source),
+  ADD INDEX idx_supplier_name  (supplier_name),
+  ADD INDEX idx_supplier_ref   (supplier_ref);
+
+ALTER TABLE product_skus
+  ADD INDEX idx_supplier_sku_ref (supplier_sku_ref);
+
+ALTER TABLE digital_codes
+  ADD UNIQUE KEY uq_sku_code (sku_id, code(255));
 
 -- ============================================
 -- INITIAL DATA
 -- ============================================
 
--- INSERT INTO roles (role_name, description, permissions) VALUES
--- ('super_admin', 'Super Administrator with full access',          '{"all": true}'),
--- ('admin',       'Administrator with admin portal access',        '{"user_management": true, "product_management": true, "wallet_management": true, "reports": true}'),
--- ('b2b_client',  'B2B Client with client portal access',         '{"view_products": true, "place_orders": true, "view_wallet": true}'),
--- ('viewer',      'Viewer account with limited access',            '{"view_products": true, "view_orders": true}');
+INSERT INTO roles (role_name, description, permissions) VALUES
+('super_admin', 'Super Administrator with full access',          '{"all": true}'),
+('admin',       'Administrator with admin portal access',        '{"user_management": true, "product_management": true, "wallet_management": true, "reports": true}'),
+('b2b_client',  'B2B Client with client portal access',         '{"view_products": true, "place_orders": true, "view_wallet": true}'),
+('viewer',      'Viewer account with limited access',            '{"view_products": true, "view_orders": true}');
 
--- -- Super admin user (password: Admin@123)
--- INSERT INTO users (email, password_hash, full_name, role_id, user_type, status, email_verified)
--- VALUES (
---     'admin@cardcove.com',
---     '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lXkB.8RkF2tS',
---     'Super Admin',
---     1,
---     'super_admin',
---     'active',
---     TRUE
--- );
+-- Super admin user (password: Admin@123)
+INSERT INTO users (email, password_hash, full_name, role_id, user_type, status, email_verified)
+VALUES (
+    'admin@cardcove.com',
+    '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lXkB.8RkF2tS',
+    'Super Admin',
+    1,
+    'super_admin',
+    'active',
+    TRUE
+);
 
--- INSERT INTO wallets (user_id, balance, currency, status)
--- VALUES (1, 0.00, 'USD', 'active');
+INSERT INTO wallets (user_id, balance, currency, status)
+VALUES (1, 0.00, 'USD', 'active');
 
 -- ============================================
 -- COMPLETED
