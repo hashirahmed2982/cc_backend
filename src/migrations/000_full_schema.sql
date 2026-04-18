@@ -79,17 +79,19 @@ CREATE TABLE IF NOT EXISTS viewer_accounts (
 -- 4. SESSIONS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id VARCHAR(255) PRIMARY KEY,
+    session_id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL,
-    token_hash VARCHAR(255) NOT NULL,
-    refresh_token_hash VARCHAR(255) NULL,
-    ip_address VARCHAR(45) NULL,
+    token TEXT NOT NULL,
+    refresh_token TEXT NULL,
+    ip_address VARCHAR(50) NULL,
     user_agent TEXT NULL,
+    last_activity DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     INDEX idx_user_id (user_id),
-    INDEX idx_expires_at (expires_at)
+    INDEX idx_expires_at (expires_at),
+    INDEX idx_last_activity (last_activity)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -399,14 +401,17 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     entity_id VARCHAR(100) NULL,
     old_values JSON NULL,
     new_values JSON NULL,
-    ip_address VARCHAR(45) NULL,
+    ip_address VARCHAR(50) NULL,
     user_agent TEXT NULL,
+    result ENUM('success', 'failed') NOT NULL DEFAULT 'success',
+    error_message TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL,
-    INDEX idx_user_id     (user_id),
-    INDEX idx_action      (action),
+    INDEX idx_user_id (user_id),
+    INDEX idx_action (action),
     INDEX idx_entity_type (entity_type),
-    INDEX idx_created_at  (created_at)
+    INDEX idx_created_at (created_at),
+    INDEX idx_result (result)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
