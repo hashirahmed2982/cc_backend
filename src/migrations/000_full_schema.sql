@@ -482,26 +482,26 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 -- INITIAL DATA
 -- ============================================
 
-INSERT INTO roles (role_name, description, permissions) VALUES
-('super_admin', 'Super Administrator with full access',          '{"all": true}'),
-('admin',       'Administrator with admin portal access',        '{"user_management": true, "product_management": true, "wallet_management": true, "reports": true}'),
-('b2b_client',  'B2B Client with client portal access',         '{"view_products": true, "place_orders": true, "view_wallet": true}'),
-('viewer',      'Viewer account with limited access',            '{"view_products": true, "view_orders": true}');
+-- INSERT INTO roles (role_name, description, permissions) VALUES
+-- ('super_admin', 'Super Administrator with full access',          '{"all": true}'),
+-- ('admin',       'Administrator with admin portal access',        '{"user_management": true, "product_management": true, "wallet_management": true, "reports": true}'),
+-- ('b2b_client',  'B2B Client with client portal access',         '{"view_products": true, "place_orders": true, "view_wallet": true}'),
+-- ('viewer',      'Viewer account with limited access',            '{"view_products": true, "view_orders": true}');
 
--- Super admin user (password: Admin@123)
-INSERT INTO users (email, password_hash, full_name, role_id, user_type, status, email_verified)
-VALUES (
-    'admin@cardcove.com',
-    '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lXkB.8RkF2tS',
-    'Super Admin',
-    1,
-    'super_admin',
-    'active',
-    TRUE
-);
+-- -- Super admin user (password: Admin@123)
+-- INSERT INTO users (email, password_hash, full_name, role_id, user_type, status, email_verified)
+-- VALUES (
+--     'admin@cardcove.com',
+--     '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lXkB.8RkF2tS',
+--     'Super Admin',
+--     1,
+--     'super_admin',
+--     'active',
+--     TRUE
+-- );
 
-INSERT INTO wallets (user_id, balance, currency, status)
-VALUES (1, 0.00, 'USD', 'active');
+-- INSERT INTO wallets (user_id, balance, currency, status)
+-- VALUES (1, 0.00, 'USD', 'active');
 
 -- ============================================
 -- COMPLETED
