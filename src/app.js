@@ -15,6 +15,7 @@ const productRoutes = require('./routes/product.routes');
 const orderRoutes = require('./routes/order.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const clientRoutes = require('./routes/client.routes');
+const adminRoutes  = require('./routes/admin.routes');
 // const reportRoutes = require('./routes/report.routes');
 
 const app = express();
@@ -116,6 +117,7 @@ app.use(`${API_PREFIX}/products`, productRoutes);
 app.use(`${API_PREFIX}/orders`, orderRoutes);
 app.use(`${API_PREFIX}/wallet`, walletRoutes);
 app.use(`${API_PREFIX}/client`,   clientRoutes);
+app.use(`${API_PREFIX}/admin`,   adminRoutes);
 // app.use(`${API_PREFIX}/reports`, reportRoutes);
 
 // 404 handler
