@@ -11,6 +11,15 @@ const loginValidation = [
   body('password').notEmpty().withMessage('Password is required')
 ];
 
+const otpRequestValidation = [
+  body('email').isEmail().normalizeEmail().withMessage('Valid email is required')
+];
+
+const otpVerifyValidation = [
+  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
+];
+
 const forgotPasswordValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required')
 ];
@@ -28,8 +37,6 @@ const refreshTokenValidation = [
   body('refreshToken').notEmpty().withMessage('Refresh token is required')
 ];
 
-const enable2FAValidation = [];
-
 const verify2FAValidation = [
   body('token').notEmpty().isLength({ min: 6, max: 6 }).withMessage('Valid 6-digit code is required')
 ];
@@ -39,27 +46,22 @@ const disable2FAValidation = [
   body('password').notEmpty().withMessage('Password is required')
 ];
 
-// Public routes (admin portal login only - no self-registration)
+// Public routes
 router.post('/login', loginValidation, validate, authController.login);
+router.post('/request-otp', otpRequestValidation, validate, authController.requestOTP);
+router.post('/verify-otp', otpVerifyValidation, validate, authController.verifyOTP);
 router.post('/refresh', refreshTokenValidation, validate, authController.refreshToken);
 router.post('/forgot-password', forgotPasswordValidation, validate, authController.forgotPassword);
 router.post('/reset-password', resetPasswordValidation, validate, authController.resetPassword);
 
-// ─── Portal-specific login endpoints ─────────────────────────────────────────
-// Admin portal  → only admin / super_admin can log in here
+// Portal-specific logins
 router.post('/admin/login', loginValidation, validate, authController.adminLogin);
-
-// Client portal → only b2b_client / viewer can log in here
 router.post('/client/login', loginValidation, validate, authController.clientLogin);
 
-
-
-
-// Protected routes (require authentication)
-router.use(protect); // All routes after this require authentication
-
+// Protected routes
+router.use(protect);
 router.post('/logout', authController.logout);
-router.post('/enable-2fa', enable2FAValidation, validate, authController.enable2FA);
+router.post('/enable-2fa', validate, authController.enable2FA);
 router.post('/verify-2fa', verify2FAValidation, validate, authController.verify2FA);
 router.post('/disable-2fa', disable2FAValidation, validate, authController.disable2FA);
 
