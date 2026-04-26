@@ -1,6 +1,6 @@
 -- ============================================
 -- Card Cove B2B Portal — Full Database Schema
--- Single-file migration (001 → 005 combined)
+-- Single-file migration (001 → 006 combined)
 -- ============================================
 
 -- Drop existing database if exists (CAUTION: development only)
@@ -341,7 +341,6 @@ CREATE TABLE IF NOT EXISTS viewer_accounts (
     created_by INT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-
     FOREIGN KEY (viewer_user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (b2b_client_id) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
@@ -368,6 +367,22 @@ CREATE TABLE IF NOT EXISTS client_product_access (
     INDEX idx_user_id (user_id),
     INDEX idx_product_id (product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ============================================
+-- 20. OTP VERIFICATIONS TABLE
+-- ============================================
+CREATE TABLE IF NOT EXISTS otp_verifications (
+                                                 id INT AUTO_INCREMENT PRIMARY KEY,
+                                                 email VARCHAR(255) NOT NULL,
+    otp VARCHAR(6) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_email (email),
+    INDEX idx_otp (otp),
+    INDEX idx_expires_at (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
 -- 16. SUPPLIER CONFIG TABLE
