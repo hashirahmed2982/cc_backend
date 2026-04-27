@@ -193,7 +193,7 @@ class AdminDashboardService {
 
   // ─── Recent activity (last 10 events across orders + topups + users) ──────
 
-  
+
   async _getRecentActivity() {
     const rows = await db.query(`
       SELECT * FROM (
@@ -204,9 +204,9 @@ class AdminDashboardService {
           u.created_at       AS timestamp
         FROM users u
         WHERE u.user_type = 'b2b_client'
-
+ 
         UNION ALL
-
+ 
         SELECT
           CASE tr.status
             WHEN 'approved' THEN 'topup_approved'
@@ -218,9 +218,9 @@ class AdminDashboardService {
           tr.created_at      AS timestamp
         FROM topup_requests tr
         JOIN users u ON u.user_id = tr.user_id
-
+ 
         UNION ALL
-
+ 
         SELECT
           'order_placed'     AS type,
           u.full_name        AS actor,
@@ -228,12 +228,41 @@ class AdminDashboardService {
           o.created_at       AS timestamp
         FROM orders o
         JOIN users u ON u.user_id = o.user_id
-
+ 
+        UNION ALL
+ 
+        SELECT
+          CASE al.action
+            WHEN 'user_lock'            THEN 'user_locked'
+            WHEN 'user_unlock'          THEN 'user_unlocked'
+            WHEN 'user_permanent_block' THEN 'user_permanently_blocked'
+            WHEN 'user_creation'        THEN 'user_created'
+            WHEN 'user_update'          THEN 'user_updated'
+            WHEN 'user_delete'          THEN 'user_deleted'
+            WHEN 'viewer_account_creation' THEN 'viewer_created'
+            WHEN 'wallet_settlement'    THEN 'wallet_settled'
+            WHEN 'password_reset_admin' THEN 'password_reset'
+            WHEN 'user_product_config_saved' THEN 'product_config_saved'
+            ELSE al.action
+          END                            AS type,
+          COALESCE(admin.full_name, 'System') AS actor,
+          COALESCE(target.email, CONCAT('User #', al.entity_id)) AS detail,
+          al.created_at                  AS timestamp
+        FROM audit_logs al
+        LEFT JOIN users admin  ON admin.user_id  = al.user_id
+        LEFT JOIN users target ON target.user_id = CAST(al.entity_id AS UNSIGNED)
+        WHERE al.action IN (
+          'user_lock', 'user_unlock', 'user_permanent_block',
+          'user_creation', 'user_update', 'user_delete',
+          'viewer_account_creation', 'wallet_settlement',
+          'password_reset_admin', 'user_product_config_saved'
+        )
+ 
       ) combined
       ORDER BY timestamp DESC
-      LIMIT 10
+      LIMIT 5
     `);
-
+ 
     return rows.map(r => ({
       type:      r.type,
       actor:     r.actor,
