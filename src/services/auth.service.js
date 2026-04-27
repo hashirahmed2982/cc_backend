@@ -4,6 +4,56 @@ const logger = require('../utils/logger');
 
 class AuthService {
   /**
+   * Generate and save OTP
+   */
+  async generateOTP(email) {
+    try {
+      // Generate 6 digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      const sql = `
+        INSERT INTO otp_verifications (email, otp, expires_at)
+        VALUES (?, ?, ?)
+      `;
+      
+      await db.query(sql, [email, otp, expiresAt]);
+      return otp;
+    } catch (error) {
+      logger.error('Error generating OTP:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Verify OTP
+   */
+  async verifyOTP(email, otp) {
+    try {
+      const sql = `
+        SELECT *
+        FROM otp_verifications
+        WHERE email = ?
+          AND otp = ?
+          AND expires_at > NOW()
+          AND used = false
+        ORDER BY created_at DESC LIMIT 1
+      `;
+      const record = await db.queryOne(sql, [email, otp]);
+      
+      if (record) {
+        // Mark as used
+        await db.query('UPDATE otp_verifications SET used = true WHERE id = ?', [record.id]);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      logger.error('Error verifying OTP:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Generate email verification token
    */
   async generateEmailVerificationToken(userId) {

@@ -10,8 +10,6 @@ const mfaService = require('../services/mfa.service');
 const logger = require('../utils/logger');
 const { generateTokens, verifyRefreshToken } = require('../utils/tokens');
 
-
-
 // ─── Shared login logic extracted to avoid duplication ───────────────────────
 async function performLogin(req, res, next, { allowedUserTypes, portalName }) {
   try {
@@ -170,8 +168,59 @@ async function performLogin(req, res, next, { allowedUserTypes, portalName }) {
   }
 }
 
-
 class AuthController {
+  /**
+   * Request OTP
+   * POST /api/v1/auth/request-otp
+   */
+  async requestOTP(req, res, next) {
+    try {
+      const { email } = req.body;
+      
+      // Optionally check if user exists
+      const user = await userService.findByEmail(email);
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'No account found with this email' });
+      }
+
+      const otp = await authService.generateOTP(email);
+      await emailService.sendOTPEmail(email, otp);
+
+      res.json({
+        success: true,
+        message: 'A 6-digit verification code has been sent to your email.'
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Verify OTP
+   * POST /api/v1/auth/verify-otp
+   */
+  async verifyOTP(req, res, next) {
+    try {
+      const { email, otp } = req.body;
+
+      const isValid = await authService.verifyOTP(email, otp);
+
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired verification code'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'OTP verified successfully'
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * Login user - Admin portal only (super_admin and admin)
    * POST /api/v1/auth/login
@@ -363,11 +412,8 @@ class AuthController {
       next(error);
     }
   }
- // ─── ADMIN PORTAL login ────────────────────────────────────────────────────
-  /**
-   * Admin portal login — only admin & super_admin allowed
-   * POST /api/v1/auth/admin/login
-   */
+
+  // ─── ADMIN PORTAL login ────────────────────────────────────────────────────
   async adminLogin(req, res, next) {
     return performLogin(req, res, next, {
       allowedUserTypes: ['admin', 'super_admin'],
@@ -386,6 +432,7 @@ class AuthController {
       portalName: 'client',
     });
   }
+
   /**
    * Refresh access token
    * POST /api/v1/auth/refresh
@@ -401,9 +448,7 @@ class AuthController {
         });
       }
 
-      // Verify refresh token
       const decoded = verifyRefreshToken(refreshToken);
-      
       if (!decoded) {
         return res.status(401).json({
           success: false,
@@ -411,9 +456,7 @@ class AuthController {
         });
       }
 
-      // Check if session exists
       const session = await sessionService.findByRefreshToken(refreshToken);
-      
       if (!session) {
         return res.status(401).json({
           success: false,
@@ -423,7 +466,7 @@ class AuthController {
 
       // Get user
       const user = await userService.findById(decoded.userId);
-      
+
       if (!user || user.status !== 'active') {
         return res.status(401).json({
           success: false,
@@ -471,10 +514,7 @@ class AuthController {
         ip_address: req.ip
       });
 
-      res.json({
-        success: true,
-        message: 'Logged out successfully'
-      });
+      res.json({ success: true, message: 'Logged out successfully' });
     } catch (error) {
       next(error);
     }
@@ -487,7 +527,6 @@ class AuthController {
   async forgotPassword(req, res, next) {
     try {
       const { email } = req.body;
-
       const user = await userService.findByEmail(email);
       
       if (!user) {
@@ -529,41 +568,18 @@ class AuthController {
   async resetPassword(req, res, next) {
     try {
       const { token, newPassword } = req.body;
-
       const tokenData = await authService.verifyPasswordResetToken(token);
       
-      // if (!tokenData) {
-      //   return res.status(400).json({
-      //     success: false,
-      //     message: 'Invalid or expired reset token'
-      //   });
-      // }
+      if (!tokenData) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
+      }
 
-      // Hash new password
-      const passwordHash = await bcrypt.hash(
-        newPassword,
-        parseInt(process.env.BCRYPT_ROUNDS) || 12
-      );
+      const passwordHash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
       
-  logger.info('Password Reset Debug Info:');
-  // logger.info(`  User ID: ${tokenData.user_id}`);
-  logger.info(`  New Password: ${newPassword}`);
-  logger.info(`  Password Hash: ${passwordHash}`);
-  logger.info(`  SQL Query: UPDATE users SET password_hash = '${passwordHash}' WHERE user_id = ${tokenData.user_id};`);
-
-
-      // Update password
-      await userService.update(tokenData.user_id, {
-        password_hash: passwordHash
-      });
-
-      // Invalidate all sessions
+      await userService.update(tokenData.user_id, { password_hash: passwordHash });
       await sessionService.deleteAllByUserId(tokenData.user_id);
-
-      // Delete reset token
       await authService.deletePasswordResetToken(token);
 
-      // Log action
       await auditService.log({
         user_id: tokenData.user_id,
         action: 'password_reset',
@@ -572,10 +588,7 @@ class AuthController {
         ip_address: req.ip
       });
 
-      res.json({
-        success: true,
-        message: 'Password reset successfully. Please login with your new password.'
-      });
+      res.json({ success: true, message: 'Password reset successfully. Please login.' });
     } catch (error) {
       next(error);
     }
@@ -583,18 +596,12 @@ class AuthController {
 
   /**
    * Enable 2FA
-   * POST /api/v1/auth/enable-2fa
    */
   async enable2FA(req, res, next) {
     try {
       const userId = req.user.user_id;
-
       const { secret, qrCode } = await mfaService.generateSecret(userId);
-
-      res.json({
-        success: true,
-        data: { secret, qrCode }
-      });
+      res.json({ success: true, data: { secret, qrCode } });
     } catch (error) {
       next(error);
     }
@@ -602,23 +609,17 @@ class AuthController {
 
   /**
    * Verify and activate 2FA
-   * POST /api/v1/auth/verify-2fa
    */
   async verify2FA(req, res, next) {
     try {
       const { token } = req.body;
       const userId = req.user.user_id;
-
       const isValid = await mfaService.verifyAndEnable(userId, token);
 
       if (!isValid) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid verification code'
-        });
+        return res.status(400).json({ success: false, message: 'Invalid verification code' });
       }
 
-      // Log action
       await auditService.log({
         user_id: userId,
         action: '2fa_enabled',
@@ -627,10 +628,7 @@ class AuthController {
         ip_address: req.ip
       });
 
-      res.json({
-        success: true,
-        message: '2FA enabled successfully'
-      });
+      res.json({ success: true, message: '2FA enabled successfully' });
     } catch (error) {
       next(error);
     }
@@ -638,38 +636,25 @@ class AuthController {
 
   /**
    * Disable 2FA
-   * POST /api/v1/auth/disable-2fa
    */
   async disable2FA(req, res, next) {
     try {
       const { token, password } = req.body;
       const userId = req.user.user_id;
 
-      // Verify password
       const user = await userService.findById(userId);
       const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
       if (!isPasswordValid) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid password'
-        });
+        return res.status(401).json({ success: false, message: 'Invalid password' });
       }
 
-      // Verify MFA token
       const isValid = await mfaService.verifyToken(userId, token);
-
       if (!isValid) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid MFA code'
-        });
+        return res.status(400).json({ success: false, message: 'Invalid MFA code' });
       }
 
-      // Disable 2FA
       await mfaService.disable(userId);
-
-      // Log action
       await auditService.log({
         user_id: userId,
         action: '2fa_disabled',
@@ -678,10 +663,7 @@ class AuthController {
         ip_address: req.ip
       });
 
-      res.json({
-        success: true,
-        message: '2FA disabled successfully'
-      });
+      res.json({ success: true, message: '2FA disabled successfully' });
     } catch (error) {
       next(error);
     }
