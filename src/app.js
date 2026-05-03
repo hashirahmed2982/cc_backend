@@ -15,7 +15,8 @@ const productRoutes = require('./routes/product.routes');
 const orderRoutes = require('./routes/order.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const clientRoutes = require('./routes/client.routes');
-const adminRoutes  = require('./routes/admin.routes');
+const adminRoutes = require('./routes/admin.routes');
+
 // const reportRoutes = require('./routes/report.routes');
 
 const app = express();
@@ -42,10 +43,10 @@ app.use(helmet({
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
-    
+
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -116,8 +117,9 @@ app.use(`${API_PREFIX}/users`, userRoutes);
 app.use(`${API_PREFIX}/products`, productRoutes);
 app.use(`${API_PREFIX}/orders`, orderRoutes);
 app.use(`${API_PREFIX}/wallet`, walletRoutes);
-app.use(`${API_PREFIX}/client`,   clientRoutes);
-app.use(`${API_PREFIX}/admin`,   adminRoutes);
+app.use(`${API_PREFIX}/client`, clientRoutes);
+app.use(`${API_PREFIX}/admin`, adminRoutes);
+
 // app.use(`${API_PREFIX}/reports`, reportRoutes);
 
 // 404 handler

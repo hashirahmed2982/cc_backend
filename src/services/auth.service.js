@@ -10,7 +10,8 @@ class AuthService {
     try {
       // Generate 6 digit OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      // Increase expiry to 1 hour to account for server/db time drift
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000); 
 
       const sql = `
         INSERT INTO otp_verifications (email, otp, expires_at)
@@ -30,23 +31,40 @@ class AuthService {
    */
   async verifyOTP(email, otp) {
     try {
-      const sql = `
-        SELECT *
+      logger.info(`Attempting to verify OTP: ${otp} for email: ${email}`);
+
+      // First, retrieve the OTP record based on email and OTP, regardless of 'used' or 'expires_at' for detailed checks
+      const findOtpSql = `
+        SELECT id, expires_at, used
         FROM otp_verifications
-        WHERE email = ?
-          AND otp = ?
-          AND expires_at > NOW()
-          AND used = false
+        WHERE email = ? AND otp = ?
         ORDER BY created_at DESC LIMIT 1
       `;
-      const record = await db.queryOne(sql, [email, otp]);
-      
-      if (record) {
-        // Mark as used
-        await db.query('UPDATE otp_verifications SET used = true WHERE id = ?', [record.id]);
-        return true;
+      const record = await db.queryOne(findOtpSql, [email, otp]);
+
+      if (!record) {
+        logger.warn(`❌ OTP Verification failed for ${email}. No matching OTP record found for OTP: ${otp}`);
+        return false; // No record found
       }
-      return false;
+
+      if (record.used) {
+        logger.warn(`❌ OTP Verification failed for ${email}. OTP ID ${record.id} has already been used.`);
+        return false; // OTP already used
+      }
+
+      // Now, explicitly check for expiration using the database's current timestamp (NOW())
+      // The database connection is configured to use UTC, so NOW() will be UTC.
+      const isExpired = new Date(record.expires_at) < new Date(); // Compare with current server time
+
+      if (isExpired) {
+        logger.warn(`❌ OTP Verification failed for ${email}. OTP ID ${record.id} has expired. Expires at: ${record.expires_at}`);
+        return false; // OTP expired
+      }
+
+      // If all checks pass (record found, not used, not expired), mark as used
+      await db.query('UPDATE otp_verifications SET used = true WHERE id = ?', [record.id]);
+      logger.info(`✅ OTP Verified successfully for ${email}. OTP ID: ${record.id}`);
+      return true;
     } catch (error) {
       logger.error('Error verifying OTP:', error);
       throw error;
@@ -59,7 +77,7 @@ class AuthService {
   async generateEmailVerificationToken(userId) {
     try {
       const token = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       const sql = `
         INSERT INTO email_verification_tokens (user_id, token, expires_at)
@@ -84,7 +102,6 @@ class AuthService {
         WHERE token = ? AND expires_at > NOW()
         LIMIT 1
       `;
-      
       return await db.queryOne(sql, [token]);
     } catch (error) {
       logger.error('Error verifying email token:', error);
@@ -112,7 +129,7 @@ class AuthService {
   async generatePasswordResetToken(userId) {
     try {
       const token = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       const sql = `
         INSERT INTO password_reset_tokens (user_id, token, expires_at, used)
@@ -134,11 +151,17 @@ class AuthService {
     try {
       const sql = `
         SELECT * FROM password_reset_tokens
-        WHERE token = ? AND expires_at > NOW() AND used = false
+        WHERE token = ? AND used = false
         LIMIT 1
       `;
       
-      return await db.queryOne(sql, [token]);
+      const row = await db.queryOne(sql, [token]);
+      if (row) {
+        logger.info('Token found and verified:', { token, userId: row.user_id });
+      } else {
+        logger.warn('Token not found or already used:', token);
+      }
+      return row;
     } catch (error) {
       logger.error('Error verifying password reset token:', error);
       throw error;

@@ -1,20 +1,21 @@
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const templates = require('./emailTemplates');
 
 class EmailService {
   constructor() {
     this.transporter = null;
     this.isConfigured = false;
 
-    if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
+    if (process.env.EMAIL_HOST && process.env.MAILTRAP_API_TOKEN) {
       try {
         this.transporter = nodemailer.createTransport({
           host: process.env.EMAIL_HOST,
           port: parseInt(process.env.EMAIL_PORT) || 587,
           secure: process.env.EMAIL_SECURE === 'true', 
           auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASSWORD
+            user: 'api',
+            pass: process.env.MAILTRAP_API_TOKEN
           },
           debug: true, // Enable debug output
           logger: true // Log to console
@@ -55,6 +56,16 @@ class EmailService {
       logger.error('Email send failure:', error.message);
       return { error: error.message };
     }
+  }
+
+  async sendTemplate(templateName, toEmail, vars) {
+    const templateFn = templates[templateName];
+    if (!templateFn) {
+      logger.error(`Email template not found: ${templateName}`);
+      throw new Error(`Unknown email template: ${templateName}`);
+    }
+    const { subject, html } = templateFn(vars);
+    return this.sendEmail(toEmail, subject, html);
   }
 
   async sendOTPEmail(email, otp) {

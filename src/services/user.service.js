@@ -47,13 +47,13 @@ class UserService {
     try {
       const sql = `
         INSERT INTO users (
-          email, password_hash, full_name, company_name, 
-          role_id, user_type, status, phone, 
-          is_2fa_enabled, created_by
+          email, password_hash, full_name, company_name,
+          role_id, user_type, status, phone,
+          is_2fa_enabled, must_change_password, created_by
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
-      
+
       const params = [
         userData.email,
         userData.password_hash,
@@ -64,6 +64,7 @@ class UserService {
         userData.status || 'active',
         userData.phone || null,
         userData.is_2fa_enabled || false,
+        userData.must_change_password || false,
         userData.created_by || null
       ];
 
@@ -84,9 +85,9 @@ class UserService {
         'full_name', 'phone', 'company_name', 'status', 'role_id',
         'is_2fa_enabled', '2fa_secret', 'failed_login_attempts',
         'locked_until', 'last_login', 'email_verified', 'password_hash',
-        'updated_by', 'permanent_block_reason', 'permanent_block_date',
-        'wallet_settled', 'settlement_method', 'settlement_reference',
-        'settlement_date', 'settlement_notes'
+        'must_change_password', 'updated_by', 'permanent_block_reason',
+        'permanent_block_date', 'wallet_settled', 'settlement_method',
+        'settlement_reference', 'settlement_date', 'settlement_notes'
       ];
 
       const updateFields = [];

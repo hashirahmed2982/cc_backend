@@ -2,6 +2,7 @@ const userService = require('../services/user.service');
 const userProductService = require('../services/userProduct.service');
 
 const auditService = require('../services/audit.service');
+const emailService = require('../services/email.service');
 const logger = require('../utils/logger');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -138,6 +139,7 @@ class UserController {
         user_type: targetType,
         status: 'active',
         email_verified: true,
+        must_change_password: true,
         created_by: requestingUser.user_id
       });
 
@@ -292,21 +294,30 @@ class UserController {
         updated_by: req.user.user_id
       });
 
-      // Log action
-      await auditService.log({
-        user_id: req.user.user_id,
-        action: 'user_lock',
-        entity_type: 'user',
-        entity_id: id,
-        new_values: { reason },
-        ip_address: req.ip,
-        user_agent: req.get('user-agent')
-      });
+       // Log action
+       await auditService.log({
+         user_id: req.user.user_id,
+         action: 'user_lock',
+         entity_type: 'user',
+         entity_id: id,
+         new_values: { reason },
+         ip_address: req.ip,
+         user_agent: req.get('user-agent')
+       });
 
-      res.json({
-        success: true,
-        message: 'User locked successfully'
-      });
+       try {
+         await emailService.sendTemplate('accountBlocked', user.email, {
+           Client_Name: user.full_name,
+           Date: new Date().toLocaleDateString('en-GB')
+         });
+       } catch (emailErr) {
+         logger.warn('Account blocked email failed:', emailErr.message);
+       }
+
+       res.json({
+         success: true,
+         message: 'User locked successfully'
+       });
     } catch (error) {
       next(error);
     }
@@ -343,20 +354,29 @@ class UserController {
         updated_by: req.user.user_id
       });
 
-      // Log action
-      await auditService.log({
-        user_id: req.user.user_id,
-        action: 'user_unlock',
-        entity_type: 'user',
-        entity_id: id,
-        ip_address: req.ip,
-        user_agent: req.get('user-agent')
-      });
+       // Log action
+       await auditService.log({
+         user_id: req.user.user_id,
+         action: 'user_unlock',
+         entity_type: 'user',
+         entity_id: id,
+         ip_address: req.ip,
+         user_agent: req.get('user-agent')
+       });
 
-      res.json({
-        success: true,
-        message: 'User unlocked successfully'
-      });
+       try {
+         await emailService.sendTemplate('accountReactivated', user.email, {
+           Client_Name: user.full_name,
+           Date: new Date().toLocaleDateString('en-GB')
+         });
+       } catch (emailErr) {
+         logger.warn('Account reactivated email failed:', emailErr.message);
+       }
+
+       res.json({
+         success: true,
+         message: 'User unlocked successfully'
+       });
     } catch (error) {
       next(error);
     }
@@ -390,6 +410,7 @@ class UserController {
 
       await userService.update(parseInt(id), {
         password_hash: passwordHash,
+        must_change_password: true,
         updated_by: req.user.user_id
       });
 
@@ -469,23 +490,32 @@ class UserController {
         user_agent: req.get('user-agent')
       });
 
-      // Log settlement if done inline
-      if (walletSettled) {
-        await auditService.log({
-          user_id: req.user.user_id,
-          action: 'wallet_settlement',
-          entity_type: 'user',
-          entity_id: parseInt(id),
-          new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
-          ip_address: req.ip,
-          user_agent: req.get('user-agent')
-        });
-      }
+       // Log settlement if done inline
+       if (walletSettled) {
+         await auditService.log({
+           user_id: req.user.user_id,
+           action: 'wallet_settlement',
+           entity_type: 'user',
+           entity_id: parseInt(id),
+           new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
+           ip_address: req.ip,
+           user_agent: req.get('user-agent')
+         });
+       }
 
-      res.json({
-        success: true,
-        message: 'User permanently blocked'
-      });
+       try {
+         await emailService.sendTemplate('accountBlocked', user.email, {
+           Client_Name: user.full_name,
+           Date: new Date().toLocaleDateString('en-GB')
+         });
+       } catch (emailErr) {
+         logger.warn('Permanent block email failed:', emailErr.message);
+       }
+
+       res.json({
+         success: true,
+         message: 'User permanently blocked'
+       });
     } catch (error) {
       next(error);
     }
@@ -525,21 +555,33 @@ class UserController {
         updated_by: req.user.user_id
       });
 
-      // Log action
-      await auditService.log({
-  user_id: req.user.user_id,
-  action: 'wallet_settlement',
-  entity_type: 'user',
-  entity_id: parseInt(id),
-  new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
-  ip_address: req.ip,
-  user_agent: req.get('user-agent')
+       // Log action
+       await auditService.log({
+   user_id: req.user.user_id,
+   action: 'wallet_settlement',
+   entity_type: 'user',
+   entity_id: parseInt(id),
+   new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
+   ip_address: req.ip,
+   user_agent: req.get('user-agent')
 });
 
-      res.json({
-        success: true,
-        message: 'Wallet settled successfully'
-      });
+       try {
+         await emailService.sendTemplate('walletBalanceSettled', user.email, {
+           Client_Name: user.full_name,
+           Amount: user.wallet_balance || 0,
+           Currency: 'USD',
+           Wallet_Balance: 0,
+           Date: settlementDate || new Date().toLocaleDateString('en-GB')
+         });
+       } catch (emailErr) {
+         logger.warn('Wallet settled email failed:', emailErr.message);
+       }
+
+       res.json({
+         success: true,
+         message: 'Wallet settled successfully'
+       });
     } catch (error) {
       next(error);
     }
@@ -624,6 +666,7 @@ async createViewerAccount(req, res, next) {
       role_id: 4,       // viewer role
       user_type: 'viewer',
       status: 'active',
+      must_change_password: true,
       created_by: requestingUser.user_id
     });
 

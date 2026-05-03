@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
-const { protect } = require('../middleware/auth');
+const { protect, requirePasswordChange } = require('../middleware/auth');
 const { validate } = require('../middleware/validation');
 const { body } = require('express-validator');
 
@@ -46,6 +46,15 @@ const disable2FAValidation = [
   body('password').notEmpty().withMessage('Password is required')
 ];
 
+const changePasswordValidation = [
+  body('currentPassword').notEmpty().withMessage('Current password is required'),
+  body('newPassword')
+    .isLength({ min: 8 })
+    .withMessage('Password must be at least 8 characters')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage('Password must contain uppercase, lowercase, and number')
+];
+
 // Public routes
 router.post('/login', loginValidation, validate, authController.login);
 router.post('/request-otp', otpRequestValidation, validate, authController.requestOTP);
@@ -61,6 +70,10 @@ router.post('/client/login', loginValidation, validate, authController.clientLog
 // Protected routes
 router.use(protect);
 router.post('/logout', authController.logout);
+router.post('/change-password', changePasswordValidation, validate, authController.changePassword);
+
+// Block access to remaining routes when mustChangePassword is true
+router.use(requirePasswordChange);
 router.post('/enable-2fa', validate, authController.enable2FA);
 router.post('/verify-2fa', verify2FAValidation, validate, authController.verify2FA);
 router.post('/disable-2fa', disable2FAValidation, validate, authController.disable2FA);
