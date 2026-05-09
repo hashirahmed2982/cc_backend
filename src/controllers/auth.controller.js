@@ -152,7 +152,12 @@ async function performLogin(req, res, next, { allowedUserTypes, portalName }) {
     return res.json({
       success: true,
       message: 'Login successful',
-      data: { user: userData, accessToken, refreshToken },
+      data: {
+        user: userData,
+        accessToken,
+        refreshToken,
+        mustChangePassword: !!userData.must_change_password,
+      },
     });
   } catch (error) {
     await auditService.log({
@@ -394,7 +399,8 @@ class AuthController {
         data: {
           user: userData,
           accessToken,
-          refreshToken
+          refreshToken,
+          mustChangePassword: !!userData.must_change_password,
         }
       });
     } catch (error) {
@@ -541,7 +547,10 @@ class AuthController {
       const resetToken = await authService.generatePasswordResetToken(user.user_id);
 
       // Send reset email
-      await emailService.sendPasswordResetEmail(email, user.full_name, resetToken);
+      await emailService.sendTemplate('passwordReset', email, {
+        Client_Name: user.full_name,
+        Password_Reset_Link: `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`
+      });
 
       // Log action
       await auditService.log({
@@ -629,6 +638,45 @@ class AuthController {
       });
 
       res.json({ success: true, message: '2FA enabled successfully' });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Change password (first-time enforcement or voluntary)
+   * POST /api/v1/auth/change-password
+   */
+  async changePassword(req, res, next) {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const userId = req.user.user_id;
+
+      const user = await userService.findById(userId);
+
+      const isPasswordValid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!isPasswordValid) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+
+      await userService.update(userId, {
+        password_hash: passwordHash,
+        must_change_password: false,
+        updated_by: userId,
+      });
+
+      await auditService.log({
+        user_id: userId,
+        action: 'password_changed',
+        entity_type: 'user',
+        entity_id: userId,
+        ip_address: req.ip,
+        user_agent: req.get('user-agent'),
+      });
+
+      res.json({ success: true, message: 'Password changed successfully' });
     } catch (error) {
       next(error);
     }

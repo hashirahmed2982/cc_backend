@@ -3,6 +3,7 @@
 
 const orderService = require('../services/order.service');
 const auditService = require('../services/audit.service');
+const emailService = require('../services/email.service');
 const logger       = require('../utils/logger');
 
 class OrderController {
@@ -29,6 +30,18 @@ class OrderController {
         ip_address:  req.ip,
         user_agent:  req.get('User-Agent'),
       });
+
+      try {
+        await emailService.sendTemplate('orderConfirmation', req.user.email, {
+          Client_Name: req.user.full_name,
+          Order_ID: result.orderNumber,
+          Date: new Date().toLocaleDateString('en-GB'),
+          Amount: result.totalAmount,
+          Currency: 'USD'
+        });
+      } catch (emailErr) {
+        logger.warn('Order confirmation email failed:', emailErr.message);
+      }
 
       res.status(201).json({
         success: true,
@@ -101,6 +114,20 @@ class OrderController {
         ip_address:  req.ip,
         user_agent:  req.get('User-Agent'),
       });
+
+      try {
+        const order = await orderService.getOrderById(orderId);
+        await emailService.sendTemplate('orderFulfilled', order.client.email, {
+          Client_Name: order.client.full_name,
+          Order_ID: result.orderNumber,
+          Date: new Date().toLocaleDateString('en-GB'),
+          Amount: order.totalAmount,
+          Currency: 'USD',
+          Dashboard_URL: process.env.FRONTEND_URL + '/dashboard/orders'
+        });
+      } catch (emailErr) {
+        logger.warn('Order fulfilled email failed:', emailErr.message);
+      }
 
       res.json({
         success: true,

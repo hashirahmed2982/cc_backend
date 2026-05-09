@@ -142,6 +142,16 @@ const verifyMFA = async (req, res, next) => {
 };
 
 /**
+ * Block access when the user has a pending forced password change
+ */
+const requirePasswordChange = (req, res, next) => {
+  if (req.user.must_change_password) {
+    return next(new AppError('You must change your password before accessing this resource.', 403));
+  }
+  next();
+};
+
+/**
  * Check IP whitelist for admin portal
  */
 const checkIPWhitelist = (req, res, next) => {
@@ -172,5 +182,6 @@ module.exports = {
   isAdmin,
   isSuperAdmin,
   verifyMFA,
-  checkIPWhitelist
+  checkIPWhitelist,
+  requirePasswordChange,
 };

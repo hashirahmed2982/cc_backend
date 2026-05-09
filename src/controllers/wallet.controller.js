@@ -2,6 +2,8 @@
 const walletService = require('../services/wallet.service');
 const mfaService    = require('../services/mfa.service');
 const auditService  = require('../services/audit.service');
+const emailService  = require('../services/email.service');
+const userService   = require('../services/user.service');
 const logger        = require('../utils/logger');
 
 class WalletController {
@@ -78,7 +80,19 @@ class WalletController {
         ip_address: req.ip,
         user_agent: req.get('user-agent'),
       });
- 
+
+      try {
+        await emailService.sendTemplate('topUpReceived', req.user.email, {
+          Client_Name: req.user.full_name,
+          Reference_ID: requestId,
+          Amount: amount,
+          Currency: 'USD',
+          Date: new Date().toLocaleDateString('en-GB')
+        });
+      } catch (emailErr) {
+        logger.warn('Top-up received email failed:', emailErr.message);
+      }
+
       res.status(201).json({
         success: true,
         message: 'Topup request submitted successfully. Awaiting admin approval.',
@@ -171,6 +185,23 @@ class WalletController {
         user_agent: req.get('user-agent'),
       });
 
+      try {
+        const topupRequest = await walletService.getTopupRequestById(parseInt(requestId));
+        if (topupRequest) {
+          const approvedWallet = await walletService.getWalletByUserId(topupRequest.user_id);
+          await emailService.sendTemplate('topUpSuccessful', topupRequest.userEmail, {
+            Client_Name: topupRequest.userName,
+            Reference_ID: requestId,
+            Amount: topupRequest.amount,
+            Currency: 'USD',
+            Wallet_Balance: approvedWallet ? approvedWallet.balance : 'N/A',
+            Date: new Date().toLocaleDateString('en-GB')
+          });
+        }
+      } catch (emailErr) {
+        logger.warn('Top-up approved email failed:', emailErr.message);
+      }
+
       res.json({
         success: true,
         message: `Topup of $${result.amount} approved. Wallet credited.`,
@@ -206,7 +237,7 @@ class WalletController {
         return res.status(400).json({ success: false, message: 'Invalid MFA code' });
       }
 
-      await walletService.rejectTopupRequest(parseInt(requestId), reason, req.user.user_id);
+       await walletService.rejectTopupRequest(parseInt(requestId), reason, req.user.user_id);
 
       await auditService.log({
         user_id: req.user.user_id,
@@ -217,6 +248,23 @@ class WalletController {
         ip_address: req.ip,
         user_agent: req.get('user-agent'),
       });
+
+      try {
+        // Fetch topup request details to get user and amount
+        const topupRequest = await walletService.getTopupRequestById(parseInt(requestId));
+        if (topupRequest) {
+          const topupUser = await userService.findById(topupRequest.user_id);
+          await emailService.sendTemplate('topUpCanceled', topupUser.email, {
+            Client_Name: topupUser.full_name,
+            Reference_ID: requestId,
+            Amount: topupRequest.amount,
+            Currency: 'USD',
+            Date: new Date().toLocaleDateString('en-GB')
+          });
+        }
+      } catch (emailErr) {
+        logger.warn('Top-up rejected email failed:', emailErr.message);
+      }
 
       res.json({ success: true, message: 'Topup request rejected.' });
     } catch (err) {

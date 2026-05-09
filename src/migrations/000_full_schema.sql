@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS users (
     company_name VARCHAR(255) NULL,
     is_2fa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     `2fa_secret` VARCHAR(255) NULL,
+    must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
     failed_login_attempts INT NOT NULL DEFAULT 0,
     locked_until DATETIME NULL,
     last_login DATETIME NULL,
