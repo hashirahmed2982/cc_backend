@@ -7,6 +7,7 @@ const router                   = express.Router();
 const multer                   = require('multer');
 const userProductService       = require('../services/userProduct.service');
 const clientDashboardService   = require('../services/clientDashboard.service');
+const userController           = require('../controllers/user.controller'); // Import userController
 const { protect }              = require('../middleware/auth');
 const { query, param, body }   = require('express-validator');
 const { validate }             = require('../middleware/validation');
@@ -25,6 +26,23 @@ const ticketUpload = multer({
 });
 
 router.use(protect);
+
+// Validation rules for updateMySettings
+const updateMySettingsValidation = [
+  body('email').optional().isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('password')
+    .optional()
+    .isLength({ min: 8 })
+    .withMessage('Password must be at least 8 characters')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage('Password must contain uppercase, lowercase, and number'),
+  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
+  body('company').optional().trim()
+];
+
+// ─── User Self-Service Settings ──────────────────────────────────────────
+router.put('/me/settings', updateMySettingsValidation, validate, userController.updateMySettings);
+
 
 // ─── Dashboard summary ─────────────────────────────────────────────────────
 // GET /api/v1/client/dashboard

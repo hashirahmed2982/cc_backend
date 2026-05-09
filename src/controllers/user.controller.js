@@ -232,7 +232,7 @@ class UserController {
   async updateMySettings(req, res, next) {
     try {
       const userId = req.user.user_id; // Get user ID from JWT
-      const { email, password, name, company, phone } = req.body;
+      const { email, password, name, company } = req.body; // Removed phone
 
       const user = await userService.findById(userId);
       if (!user) {
@@ -246,9 +246,8 @@ class UserController {
       const oldValues = {
         email: user.email,
         full_name: user.full_name,
-        company_name: user.company_name,
-        phone: user.phone
-      };
+        company_name: user.company_name
+      }; // Removed phone
 
       // Handle email update
       if (email && email !== user.email) {
@@ -273,7 +272,6 @@ class UserController {
 
       if (name) updates.full_name = name;
       if (company) updates.company_name = company;
-      if (phone) updates.phone = phone;
       updates.updated_by = userId;
 
       if (Object.keys(updates).length === 0) {

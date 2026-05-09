@@ -40,19 +40,6 @@ const updateUserValidation = [
   body('phone').optional().trim()
 ];
 
-const updateMySettingsValidation = [
-  body('email').optional().isEmail().normalizeEmail().withMessage('Valid email is required'),
-  body('password')
-    .optional()
-    .isLength({ min: 8 })
-    .withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage('Password must contain uppercase, lowercase, and number'),
-  body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
-  body('company').optional().trim(),
-  body('phone').optional().trim()
-];
-
 const lockUserValidation = [
   param('id').isInt().withMessage('Valid user ID required'),
   body('reason').trim().notEmpty().withMessage('Reason is required')
@@ -70,9 +57,6 @@ const settleWalletValidation = [
   body('settlementDate').isDate().withMessage('Valid settlement date is required'),
   body('settlementNotes').optional().trim()
 ];
-
-// User self-service settings
-router.put('/me/settings', updateMySettingsValidation, validate, userController.updateMySettings);
 
 // All routes below this require admin role
 router.use(isAdmin);
