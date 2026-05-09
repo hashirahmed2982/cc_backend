@@ -30,23 +30,40 @@ class AuthService {
    */
   async verifyOTP(email, otp) {
     try {
-      const sql = `
-        SELECT *
+      logger.info(`Attempting to verify OTP: ${otp} for email: ${email}`);
+
+      // First, retrieve the OTP record based on email and OTP, regardless of 'used' or 'expires_at' for detailed checks
+      const findOtpSql = `
+        SELECT id, expires_at, used
         FROM otp_verifications
-        WHERE email = ?
-          AND otp = ?
-          AND expires_at > NOW()
-          AND used = false
+        WHERE email = ? AND otp = ?
         ORDER BY created_at DESC LIMIT 1
       `;
-      const record = await db.queryOne(sql, [email, otp]);
-      
-      if (record) {
-        // Mark as used
-        await db.query('UPDATE otp_verifications SET used = true WHERE id = ?', [record.id]);
-        return true;
+      const record = await db.queryOne(findOtpSql, [email, otp]);
+
+      if (!record) {
+        logger.warn(`❌ OTP Verification failed for ${email}. No matching OTP record found for OTP: ${otp}`);
+        return false; // No record found
       }
-      return false;
+
+      if (record.used) {
+        logger.warn(`❌ OTP Verification failed for ${email}. OTP ID ${record.id} has already been used.`);
+        return false; // OTP already used
+      }
+
+      // Now, explicitly check for expiration using the database's current timestamp (NOW())
+      // The database connection is configured to use UTC, so NOW() will be UTC.
+      const isExpired = new Date(record.expires_at) < new Date(); // Compare with current server time
+
+      if (isExpired) {
+        logger.warn(`❌ OTP Verification failed for ${email}. OTP ID ${record.id} has expired. Expires at: ${record.expires_at}`);
+        return false; // OTP expired
+      }
+
+      // If all checks pass (record found, not used, not expired), mark as used
+      await db.query('UPDATE otp_verifications SET used = true WHERE id = ?', [record.id]);
+      logger.info(`✅ OTP Verified successfully for ${email}. OTP ID: ${record.id}`);
+      return true;
     } catch (error) {
       logger.error('Error verifying OTP:', error);
       throw error;
