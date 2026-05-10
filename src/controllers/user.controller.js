@@ -226,6 +226,85 @@ class UserController {
   }
 
   /**
+   * Update authenticated user's own settings
+   * PUT /api/v1/users/me/settings
+   */
+  async updateMySettings(req, res, next) {
+    try {
+      const userId = req.user.user_id; // Get user ID from JWT
+      const { email, password, name, company } = req.body; // Removed phone
+
+      const user = await userService.findById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      const updates = {};
+      const oldValues = {
+        email: user.email,
+        full_name: user.full_name,
+        company_name: user.company_name
+      }; // Removed phone
+
+      // Handle email update
+      if (email && email !== user.email) {
+        const existingUser = await userService.findByEmail(email);
+        if (existingUser) {
+          return res.status(409).json({
+            success: false,
+            message: 'Email already exists'
+          });
+        }
+        updates.email = email;
+      }
+
+      // Handle password update
+      if (password) {
+        updates.password_hash = await bcrypt.hash(
+          password,
+          parseInt(process.env.BCRYPT_ROUNDS) || 12
+        );
+        updates.must_change_password = false; // User explicitly changed password
+      }
+
+      if (name) updates.full_name = name;
+      if (company) updates.company_name = company;
+      updates.updated_by = userId;
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(200).json({
+          success: true,
+          message: 'No changes provided to update.'
+        });
+      }
+
+      await userService.update(userId, updates);
+
+      // Log action
+      await auditService.log({
+        user_id: userId,
+        action: 'user_settings_update',
+        entity_type: 'user',
+        entity_id: userId,
+        oldValues: oldValues,
+        new_values: updates,
+        ip_address: req.ip,
+        user_agent: req.get('user-agent')
+      });
+
+      res.json({
+        success: true,
+        message: 'Settings updated successfully'
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Delete user
    * DELETE /api/v1/users/:id
    */

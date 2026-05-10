@@ -5,9 +5,8 @@ const { protect, isAdmin, isSuperAdmin } = require('../middleware/auth');
 const { validate } = require('../middleware/validation');
 const { body, param } = require('express-validator');
 
-// All user routes require authentication + admin role
+// All user routes require authentication
 router.use(protect);
-router.use(isAdmin);
 
 // Validation rules
 const createUserValidation = [
@@ -58,6 +57,9 @@ const settleWalletValidation = [
   body('settlementDate').isDate().withMessage('Valid settlement date is required'),
   body('settlementNotes').optional().trim()
 ];
+
+// All routes below this require admin role
+router.use(isAdmin);
 
 // User listing and lookup (admin + super_admin)
 router.get('/', userController.getAll);
