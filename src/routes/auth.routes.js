@@ -3,6 +3,7 @@ const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const { protect, requirePasswordChange } = require('../middleware/auth');
 const { validate } = require('../middleware/validation');
+const userService = require('../services/user.service');
 const { body } = require('express-validator');
 
 // Validation rules
@@ -67,8 +68,29 @@ router.post('/reset-password', resetPasswordValidation, validate, authController
 router.post('/admin/login', loginValidation, validate, authController.adminLogin);
 router.post('/client/login', loginValidation, validate, authController.clientLogin);
 
+
 // Protected routes
 router.use(protect);
+router.put('/profile', async (req, res, next) => {
+  try {
+    const { name, email } = req.body;
+    if (!name?.trim()) return res.status(400).json({ success: false, message: 'Name is required' });
+
+    const updates = { full_name: name.trim(), updated_by: req.user.user_id };
+
+    // If email is changing, check it's not already taken
+    if (email && email.trim() !== req.user.email) {
+      const existing = await userService.findByEmail(email.trim());
+      if (existing && existing.user_id !== req.user.user_id) {
+        return res.status(400).json({ success: false, message: 'Email already in use by another account' });
+      }
+      updates.email = email.trim();
+    }
+
+    await userService.update(req.user.user_id, updates);
+    res.json({ success: true, message: 'Profile updated' });
+  } catch (err) { next(err); }
+});
 router.post('/logout', authController.logout);
 router.post('/change-password', changePasswordValidation, validate, authController.changePassword);
 
@@ -77,5 +99,6 @@ router.use(requirePasswordChange);
 router.post('/enable-2fa', validate, authController.enable2FA);
 router.post('/verify-2fa', verify2FAValidation, validate, authController.verify2FA);
 router.post('/disable-2fa', disable2FAValidation, validate, authController.disable2FA);
+
 
 module.exports = router;

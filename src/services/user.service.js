@@ -82,7 +82,7 @@ class UserService {
   async update(userId, updates) {
     try {
       const allowedFields = [
-        'full_name', 'phone', 'company_name', 'status', 'role_id',
+        'full_name', 'phone', 'company_name', 'status', 'role_id','email',
         'is_2fa_enabled', '2fa_secret', 'failed_login_attempts',
         'locked_until', 'last_login', 'email_verified', 'password_hash',
         'must_change_password', 'updated_by', 'permanent_block_reason',
