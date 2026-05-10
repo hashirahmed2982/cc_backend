@@ -4,7 +4,7 @@
 const orderService = require('../services/order.service');
 const auditService = require('../services/audit.service');
 const emailService = require('../services/email.service');
-const logger       = require('../utils/logger');
+const logger = require('../utils/logger');
 
 class OrderController {
 
@@ -22,13 +22,13 @@ class OrderController {
       const result = await orderService.placeOrder(req.user.user_id, items, notes);
 
       await auditService.log({
-        user_id:     req.user.user_id,
-        action:      'order_placed',
+        user_id: req.user.user_id,
+        action: 'order_placed',
         entity_type: 'order',
-        entity_id:   String(result.orderId),
-        new_values:  { orderNumber: result.orderNumber, total: result.totalAmount, status: result.status },
-        ip_address:  req.ip,
-        user_agent:  req.get('User-Agent'),
+        entity_id: String(result.orderId),
+        new_values: { orderNumber: result.orderNumber, total: result.totalAmount, status: result.status },
+        ip_address: req.ip,
+        user_agent: req.get('User-Agent'),
       });
 
       try {
@@ -46,7 +46,7 @@ class OrderController {
       res.status(201).json({
         success: true,
         message: `Order ${result.orderNumber} placed successfully`,
-        data:    result,
+        data: result,
       });
     } catch (err) { next(err); }
   }
@@ -80,10 +80,26 @@ class OrderController {
   // GET /api/v1/admin/orders
   async getAllOrders(req, res, next) {
     try {
-      const { status, userId, page = 1, limit = 20 } = req.query;
+      const {
+        page = 1,
+        limit = 20,
+        status,
+        userId,
+        search,
+        dateFrom,
+        dateTo,
+      } = req.query;
+
       const result = await orderService.getAllOrders({
-        status, userId, page: parseInt(page), limit: parseInt(limit),
+        page: parseInt(page),
+        limit: parseInt(limit),
+        status,
+        userId: userId ? parseInt(userId) : undefined,
+        search: search || undefined,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
       });
+
       res.json({ success: true, ...result });
     } catch (err) { next(err); }
   }
@@ -103,16 +119,16 @@ class OrderController {
   async completeOrder(req, res, next) {
     try {
       const orderId = parseInt(req.params.id);
-      const result  = await orderService.completeOrder(orderId, req.user.user_id);
+      const result = await orderService.completeOrder(orderId, req.user.user_id);
 
       await auditService.log({
-        user_id:     req.user.user_id,
-        action:      'order_completed_by_admin',
+        user_id: req.user.user_id,
+        action: 'order_completed_by_admin',
         entity_type: 'order',
-        entity_id:   String(orderId),
-        new_values:  { completedBy: req.user.user_id, status: result.orderStatus },
-        ip_address:  req.ip,
-        user_agent:  req.get('User-Agent'),
+        entity_id: String(orderId),
+        new_values: { completedBy: req.user.user_id, status: result.orderStatus },
+        ip_address: req.ip,
+        user_agent: req.get('User-Agent'),
       });
 
       try {
@@ -132,7 +148,7 @@ class OrderController {
       res.json({
         success: true,
         message: `Order ${result.orderNumber} fulfilled and client notified`,
-        data:    result,
+        data: result,
       });
     } catch (err) { next(err); }
   }

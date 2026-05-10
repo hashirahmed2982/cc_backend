@@ -1,10 +1,11 @@
 // controllers/wallet.controller.js
 const walletService = require('../services/wallet.service');
-const mfaService    = require('../services/mfa.service');
-const auditService  = require('../services/audit.service');
-const emailService  = require('../services/email.service');
-const userService   = require('../services/user.service');
-const logger        = require('../utils/logger');
+const mfaService = require('../services/mfa.service');
+const auditService = require('../services/audit.service');
+const emailService = require('../services/email.service');
+const userService = require('../services/user.service');
+const logger = require('../utils/logger');
+
 
 class WalletController {
   // ─────────────────────────────────────────────
@@ -20,7 +21,7 @@ class WalletController {
       res.json({ success: true, data: wallet });
     } catch (err) { next(err); }
   }
- 
+
   // ─────────────────────────────────────────────
   // CLIENT: Own transactions
   // GET /api/v1/wallet/transactions
@@ -30,7 +31,7 @@ class WalletController {
       const { page = 1, limit = 20 } = req.query;
       const wallet = await walletService.getWalletByUserId(req.user.user_id);
       if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
- 
+
       const result = await walletService.getTransactions({
         walletId: wallet.wallet_id,
         page: parseInt(page),
@@ -39,7 +40,7 @@ class WalletController {
       res.json({ success: true, ...result });
     } catch (err) { next(err); }
   }
- 
+
   // ─────────────────────────────────────────────
   // CLIENT: Submit topup request
   // POST /api/v1/wallet/topup
@@ -48,29 +49,34 @@ class WalletController {
   async requestTopup(req, res, next) {
     try {
       const { amount } = req.body;
- 
+
       if (!amount || isNaN(amount) || parseFloat(amount) <= 0) {
         return res.status(400).json({ success: false, message: 'Valid amount is required' });
       }
- 
+
       const wallet = await walletService.getWalletByUserId(req.user.user_id);
       if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
- 
+
       if (wallet.status !== 'active') {
         return res.status(400).json({ success: false, message: 'Wallet is not active' });
       }
- 
+
       // Store the original filename as the receipt reference.
       // In production replace this with an S3/storage upload that returns a URL.
-      const receiptRef = req.file ? req.file.originalname : (req.body.receiptUrl || null);
- 
+      // REPLACE this line:
+
+      // WITH this:
+      const receiptRef = req.file
+        ? `/uploads/receipts/${req.file.filename}`   // actual saved path on disk
+        : (req.body.receiptUrl || null);
+
       const requestId = await walletService.createTopupRequest(
         req.user.user_id,
         wallet.wallet_id,
         parseFloat(amount),
         receiptRef
       );
- 
+
       await auditService.log({
         user_id: req.user.user_id,
         action: 'topup_request_created',
@@ -100,7 +106,7 @@ class WalletController {
       });
     } catch (err) { next(err); }
   }
- 
+
   // ─────────────────────────────────────────────
   // CLIENT: Own topup requests
   // GET /api/v1/wallet/my-topup-requests
@@ -160,9 +166,9 @@ class WalletController {
       const { requestId } = req.params;
       const { mfaCode } = req.body;
 
-      if (!mfaCode) {
-        return res.status(400).json({ success: false, message: 'MFA code is required' });
-      }
+      // if (!mfaCode) {
+      //   return res.status(400).json({ success: false, message: 'MFA code is required' });
+      // }
 
       // Verify MFA
       // const isValidMFA = await mfaService.verifyToken(req.user.user_id, mfaCode);
@@ -225,19 +231,19 @@ class WalletController {
       const { requestId } = req.params;
       const { reason, mfaCode } = req.body;
 
-      if (!mfaCode) {
-        return res.status(400).json({ success: false, message: 'MFA code is required' });
-      }
+      // if (!mfaCode) {
+      //   return res.status(400).json({ success: false, message: 'MFA code is required' });
+      // }
       if (!reason || !reason.trim()) {
         return res.status(400).json({ success: false, message: 'Rejection reason is required' });
       }
 
-      const isValidMFA = await mfaService.verifyToken(req.user.user_id, mfaCode);
-      if (!isValidMFA) {
-        return res.status(400).json({ success: false, message: 'Invalid MFA code' });
-      }
+      // const isValidMFA = await mfaService.verifyToken(req.user.user_id, mfaCode);
+      // if (!isValidMFA) {
+      //   return res.status(400).json({ success: false, message: 'Invalid MFA code' });
+      // }
 
-       await walletService.rejectTopupRequest(parseInt(requestId), reason, req.user.user_id);
+      await walletService.rejectTopupRequest(parseInt(requestId), reason, req.user.user_id);
 
       await auditService.log({
         user_id: req.user.user_id,
@@ -281,12 +287,14 @@ class WalletController {
   // ─────────────────────────────────────────────
   async getAllTransactions(req, res, next) {
     try {
-      const { page = 1, limit = 20, userId, type } = req.query;
+      const { page = 1, limit = 20, userId, type, dateFrom, dateTo } = req.query;
       const result = await walletService.getAllTransactions({
         page: parseInt(page),
         limit: parseInt(limit),
         userId: userId ? parseInt(userId) : undefined,
-        type,
+        type: type || undefined,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
       });
       res.json({ success: true, ...result });
     } catch (err) { next(err); }

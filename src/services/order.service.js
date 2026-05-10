@@ -1,13 +1,13 @@
 // services/order.service.js
 'use strict';
 
-const db          = require('../config/database');
-const logger      = require('../utils/logger');
-const crypto      = require('crypto');
+const db = require('../config/database');
+const logger = require('../utils/logger');
+const crypto = require('crypto');
 const emailService = require('./email.service');
 
 // ─── Decrypt codes (same key as product_service) ─────────────────────────────
-const RAW_KEY        = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-this!!';
+const RAW_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-this!!';
 const ENCRYPTION_KEY = Buffer.from(RAW_KEY.padEnd(32, '0').slice(0, 32));
 
 function decrypt(text) {
@@ -27,7 +27,7 @@ function decrypt(text) {
 
 // ─── Generate order number ────────────────────────────────────────────────────
 function generateOrderNumber() {
-  const ts   = Date.now().toString().slice(-8);
+  const ts = Date.now().toString().slice(-8);
   const rand = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
   return `ORD-${ts}-${rand}`;
 }
@@ -60,14 +60,14 @@ class OrderService {
 
       for (const item of items) {
         const productId = parseInt(item.productId);
-        const qty       = parseInt(item.quantity) || 1;
+        const qty = parseInt(item.quantity) || 1;
 
         // Get product
         const [prodRows] = await conn.execute(
           'SELECT product_id, product_name, source, is_active FROM products WHERE product_id = ?',
           [productId]
         );
-        if (!prodRows.length)    throw new Error(`Product ${productId} not found`);
+        if (!prodRows.length) throw new Error(`Product ${productId} not found`);
         if (!prodRows[0].is_active) throw new Error(`Product "${prodRows[0].product_name}" is not active`);
 
         // Get primary active SKU (or specific one if provided)
@@ -94,9 +94,9 @@ class OrderService {
         resolvedItems.push({
           productId,
           productName: prodRows[0].product_name,
-          source:      prodRows[0].source,
-          skuId:       sku.sku_id,
-          quantity:    qty,
+          source: prodRows[0].source,
+          skuId: sku.sku_id,
+          quantity: qty,
           unitPrice,
           lineTotal,
         });
@@ -132,7 +132,7 @@ class OrderService {
 
       // ── 6. Debit wallet ──────────────────────────────────────────────────
       const balanceBefore = balance;
-      const balanceAfter  = balance - totalAmount;
+      const balanceAfter = balance - totalAmount;
 
       await conn.execute(
         'UPDATE wallets SET balance = ?, updated_at = NOW() WHERE wallet_id = ?',
@@ -144,7 +144,7 @@ class OrderService {
             balance_before, balance_after, description, reference_type, reference_id)
          VALUES (?, ?, 'debit', ?, ?, ?, ?, ?, 'order', ?)`,
         [wallet.wallet_id, userId, totalAmount, wallet.currency,
-         balanceBefore, balanceAfter, `Order ${orderNumber}`, String(orderId)]
+          balanceBefore, balanceAfter, `Order ${orderNumber}`, String(orderId)]
       );
 
       await conn.commit();
@@ -164,11 +164,11 @@ class OrderService {
         orderId,
         orderNumber,
         totalAmount,
-        currency:        wallet.currency,
-        status:          fulfillResult.orderStatus,
-        deliveryStatus:  fulfillResult.deliveryStatus,
-        fulfilledItems:  fulfillResult.fulfilledItems,
-        pendingItems:    fulfillResult.pendingItems,
+        currency: wallet.currency,
+        status: fulfillResult.orderStatus,
+        deliveryStatus: fulfillResult.deliveryStatus,
+        fulfilledItems: fulfillResult.fulfilledItems,
+        pendingItems: fulfillResult.pendingItems,
       };
     } catch (err) {
       await conn.rollback();
@@ -185,9 +185,9 @@ class OrderService {
 
   async _fulfillOrder(orderId, resolvedItems, userId) {
     const fulfilledItems = [];
-    const pendingItems   = [];
-    let   totalFulfilled = 0;
-    let   totalQty       = 0;
+    const pendingItems = [];
+    let totalFulfilled = 0;
+    let totalQty = 0;
 
     for (const item of resolvedItems) {
       totalQty += item.quantity;
@@ -206,7 +206,7 @@ class OrderService {
       );
 
       const allocated = codes.slice(0, item.quantity);
-      const needed    = item.quantity - allocated.length;
+      const needed = item.quantity - allocated.length;
 
       if (allocated.length > 0) {
         // Mark codes as sold
@@ -240,24 +240,24 @@ class OrderService {
         totalFulfilled += allocated.length;
 
         fulfilledItems.push({
-          productId:   item.productId,
+          productId: item.productId,
           productName: item.productName,
-          skuId:       item.skuId,
-          quantity:    item.quantity,
-          delivered:   allocated.length,
-          codes:       allocated.map(c => decrypt(c.code)),
+          skuId: item.skuId,
+          quantity: item.quantity,
+          delivered: allocated.length,
+          codes: allocated.map(c => decrypt(c.code)),
         });
       }
 
       if (needed > 0) {
         pendingItems.push({
-          productId:   item.productId,
+          productId: item.productId,
           productName: item.productName,
-          skuId:       item.skuId,
-          quantity:    item.quantity,
-          delivered:   allocated.length,
-          pending:     needed,
-          reason:      'insufficient_inventory',
+          skuId: item.skuId,
+          quantity: item.quantity,
+          delivered: allocated.length,
+          pending: needed,
+          reason: 'insufficient_inventory',
         });
       }
     }
@@ -266,13 +266,13 @@ class OrderService {
     let orderStatus, deliveryStatus;
 
     if (pendingItems.length === 0) {
-      orderStatus    = 'completed';
+      orderStatus = 'completed';
       deliveryStatus = 'completed';
     } else if (fulfilledItems.length === 0) {
-      orderStatus    = 'pending';
+      orderStatus = 'pending';
       deliveryStatus = 'pending';
     } else {
-      orderStatus    = 'processing';
+      orderStatus = 'processing';
       deliveryStatus = 'partial';
     }
 
@@ -323,13 +323,13 @@ class OrderService {
 
       // Build items list for remaining quantity
       const remainingItems = detailRows.map(d => ({
-        productId:   d.product_id,
+        productId: d.product_id,
         productName: d.product_name,
-        source:      d.source,
-        skuId:       d.sku_id,
-        quantity:    d.quantity - d.delivered_qty, // only what's still needed
-        unitPrice:   parseFloat(d.unit_price),
-        lineTotal:   0,
+        source: d.source,
+        skuId: d.sku_id,
+        quantity: d.quantity - d.delivered_qty, // only what's still needed
+        unitPrice: parseFloat(d.unit_price),
+        lineTotal: 0,
       }));
 
       // Fulfill remaining
@@ -365,7 +365,7 @@ class OrderService {
 
   async getClientOrders(userId, { status, page = 1, limit = 20 } = {}) {
     const offset = (page - 1) * limit;
-    const conds  = ['o.user_id = ?'];
+    const conds = ['o.user_id = ?'];
     const params = [parseInt(userId)];
     if (status) { conds.push('o.order_status = ?'); params.push(status); }
 
@@ -426,15 +426,26 @@ class OrderService {
   //  READ — Admin
   // ══════════════════════════════════════════════════════════════════════════
 
-  async getAllOrders({ status, userId, page = 1, limit = 20 } = {}) {
-    const offset = (page - 1) * limit;
-    const conds  = [];
+  async getAllOrders({ page = 1, limit = 20, status, userId, search, dateFrom, dateTo } = {}) {
+    const whereClauses = [];
     const params = [];
-    if (status) { conds.push('o.order_status = ?');   params.push(status); }
-    if (userId) { conds.push('o.user_id = ?');        params.push(parseInt(userId)); }
 
-    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+    if (status) { whereClauses.push('o.order_status = ?'); params.push(status); }
+    if (userId) { whereClauses.push('o.user_id = ?'); params.push(userId); }
+    if (search) {
+      whereClauses.push('(o.order_number LIKE ? OR u.full_name LIKE ? OR u.company_name LIKE ?)');
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    if (dateFrom) { whereClauses.push('DATE(o.created_at) >= ?'); params.push(dateFrom); }
+    if (dateTo) { whereClauses.push('DATE(o.created_at) <= ?'); params.push(dateTo); }
 
+    // Default to today when no date range given
+    if (!dateFrom && !dateTo) {
+      whereClauses.push('DATE(o.created_at) = CURDATE()');
+    }
+
+    const whereClause = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const offset = (page - 1) * limit;   // ← this was missing
     const rows = await db.query(
       `SELECT
          o.order_id        AS id,
@@ -455,7 +466,7 @@ class OrderService {
        JOIN users u           ON u.user_id        = o.user_id
        JOIN order_details od  ON od.order_id      = o.order_id
        JOIN products p        ON p.product_id     = od.product_id
-       ${where}
+       ${whereClause}
        GROUP BY o.order_id
        ORDER BY o.created_at DESC
        LIMIT ? OFFSET ?`,
@@ -463,7 +474,7 @@ class OrderService {
     );
 
     const countRow = await db.queryOne(
-      `SELECT COUNT(DISTINCT o.order_id) AS n FROM orders o ${where}`, params
+      `SELECT COUNT(DISTINCT o.order_id) AS n FROM orders o ${whereClause}`, params
     );
 
     return {
@@ -499,28 +510,28 @@ class OrderService {
   _formatOrderDetail(rows) {
     const o = rows[0];
     return {
-      id:              String(o.order_id),
-      orderNumber:     o.order_number,
-      status:          o.order_status,
-      deliveryStatus:  o.delivery_status,
-      total:           parseFloat(o.total_amount),
-      currency:        o.currency,
-      notes:           o.notes,
-      createdAt:       o.created_at,
-      completedAt:     o.completed_at,
-      clientName:      o.clientName,
-      clientEmail:     o.clientEmail,
-      clientCompany:   o.clientCompany,
+      id: String(o.order_id),
+      orderNumber: o.order_number,
+      status: o.order_status,
+      deliveryStatus: o.delivery_status,
+      total: parseFloat(o.total_amount),
+      currency: o.currency,
+      notes: o.notes,
+      createdAt: o.created_at,
+      completedAt: o.completed_at,
+      clientName: o.clientName,
+      clientEmail: o.clientEmail,
+      clientCompany: o.clientCompany,
       items: rows.map(r => ({
-        orderDetailId:   r.order_detail_id,
-        productId:       r.product_id,
-        productName:     r.product_name,
-        skuId:           r.sku_id,
-        quantity:        r.quantity,
-        deliveredQty:    r.delivered_qty,
-        pendingQty:      r.quantity - r.delivered_qty,
-        unitPrice:       parseFloat(r.unit_price),
-        deliveryStatus:  r.item_delivery_status,
+        orderDetailId: r.order_detail_id,
+        productId: r.product_id,
+        productName: r.product_name,
+        skuId: r.sku_id,
+        quantity: r.quantity,
+        deliveredQty: r.delivered_qty,
+        pendingQty: r.quantity - r.delivered_qty,
+        unitPrice: parseFloat(r.unit_price),
+        deliveryStatus: r.item_delivery_status,
       })),
     };
   }

@@ -1,20 +1,38 @@
 // routes/wallet.routes.js
 const express    = require('express');
 const router     = express.Router();
-const multer     = require('multer');
 const walletCtrl = require('../controllers/wallet.controller');
 const { protect, isAdmin } = require('../middleware/auth');
 const { body, param, query } = require('express-validator');
 const { validate } = require('../middleware/validation');
+const logger = require('../utils/logger');
 
-const receiptUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+const multer = require('multer');
+const path   = require('path');
+const crypto = require('crypto');
+const fs     = require('fs');
+
+// Ensure upload directory exists
+const uploadDir = path.join(__dirname, '../../uploads/receipts');
+fs.mkdirSync(uploadDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const ext      = path.extname(file.originalname).toLowerCase();
+    const unique   = crypto.randomBytes(12).toString('hex');
+    cb(null, `receipt_${unique}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },  // 10MB
   fileFilter: (req, file, cb) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
     allowed.includes(file.mimetype)
       ? cb(null, true)
-      : cb(new Error('Only images (jpg/png/webp) and PDF files are allowed'), false);
+      : cb(new Error('Only JPG, PNG, WebP and PDF allowed'));
   },
 });
  
@@ -37,21 +55,42 @@ router.get('/my-topup-requests', walletCtrl.getMyTopupRequests);
 // Submit a topup request — multipart/form-data with optional receipt file
 // Fields: amount (number), receiptUrl? (string fallback if no file)
 router.post(
-  '/topup',
-  receiptUpload.single('receipt'),
-  [
-    body('amount')
-      .isFloat({ gt: 0 })
-      .withMessage('Amount must be a positive number'),
-  ],
-  validate,
+  '/topup', protect, upload.single('receipt'),
   walletCtrl.requestTopup
 );
  
 // ─────────────────────────────────────────────
 // ADMIN ROUTES
 // ─────────────────────────────────────────────
+// GET /api/v1/wallet/topup/:id/receipt
+router.get('/topup/:id/receipt', protect, isAdmin, async (req, res, next) => {
+  try {
+    const db  = require('../config/database');
+    const row = await db.queryOne(
+      'SELECT receipt_url FROM topup_requests WHERE request_id = ?',
+      [req.params.id]
+    );
 
+    logger.info(`[Receipt] Request ID: ${req.params.id}`);
+    logger.info(`[Receipt] DB row: ${JSON.stringify(row)}`);
+
+    if (!row?.receipt_url) {
+      logger.warn(`[Receipt] No receipt_url found for request_id ${req.params.id}`);
+      return res.status(404).json({ success: false, message: 'No receipt found' });
+    }
+
+    const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    const url     = `${baseUrl}${row.receipt_url}`;
+
+    logger.info(`[Receipt] API_BASE_URL env: ${process.env.API_BASE_URL}`);
+    logger.info(`[Receipt] Built URL: ${url}`);
+
+    res.json({ success: true, data: { url, expiresIn: null } });
+  } catch (err) {
+    logger.error(`[Receipt] Error for request_id ${req.params.id}:`, err.message);
+    next(err);
+  }
+});
 // All wallet balances overview
 router.get('/balances', isAdmin, walletCtrl.getAllBalances);
 

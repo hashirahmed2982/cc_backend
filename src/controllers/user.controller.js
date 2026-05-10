@@ -149,7 +149,7 @@ class UserController {
       }
 
       // Log action
-            await auditService.log({
+      await auditService.log({
         user_id: requestingUser.user_id,
         action: 'user_creation',
         entity_type: 'user',
@@ -157,7 +157,7 @@ class UserController {
         new_values: { email, name, company, user_type: targetType },
         ip_address: req.ip,
         user_agent: req.get('user-agent')
-        });
+      });
 
       res.status(201).json({
         success: true,
@@ -179,7 +179,7 @@ class UserController {
       const { name, company, phone, role } = req.body;
 
       const user = await userService.findById(parseInt(id));
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -210,11 +210,11 @@ class UserController {
         action: 'user_update',
         entity_type: 'user',
         entity_id: req.user.user_id,
-        oldValues:oldValues,
+        oldValues: oldValues,
         new_values: updates,
         ip_address: req.ip,
         user_agent: req.get('user-agent')
-        });
+      });
 
       res.json({
         success: true,
@@ -234,7 +234,7 @@ class UserController {
       const { id } = req.params;
 
       const user = await userService.findById(parseInt(id));
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -274,7 +274,7 @@ class UserController {
       const { reason } = req.body;
 
       const user = await userService.findById(parseInt(id));
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -294,30 +294,30 @@ class UserController {
         updated_by: req.user.user_id
       });
 
-       // Log action
-       await auditService.log({
-         user_id: req.user.user_id,
-         action: 'user_lock',
-         entity_type: 'user',
-         entity_id: id,
-         new_values: { reason },
-         ip_address: req.ip,
-         user_agent: req.get('user-agent')
-       });
+      // Log action
+      await auditService.log({
+        user_id: req.user.user_id,
+        action: 'user_lock',
+        entity_type: 'user',
+        entity_id: id,
+        new_values: { reason },
+        ip_address: req.ip,
+        user_agent: req.get('user-agent')
+      });
 
-       try {
-         await emailService.sendTemplate('accountBlocked', user.email, {
-           Client_Name: user.full_name,
-           Date: new Date().toLocaleDateString('en-GB')
-         });
-       } catch (emailErr) {
-         logger.warn('Account blocked email failed:', emailErr.message);
-       }
+      try {
+        await emailService.sendTemplate('accountBlocked', user.email, {
+          Client_Name: user.full_name,
+          Date: new Date().toLocaleDateString('en-GB')
+        });
+      } catch (emailErr) {
+        logger.warn('Account blocked email failed:', emailErr.message);
+      }
 
-       res.json({
-         success: true,
-         message: 'User locked successfully'
-       });
+      res.json({
+        success: true,
+        message: 'User locked successfully'
+      });
     } catch (error) {
       next(error);
     }
@@ -332,7 +332,7 @@ class UserController {
       const { id } = req.params;
 
       const user = await userService.findById(parseInt(id));
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -354,29 +354,29 @@ class UserController {
         updated_by: req.user.user_id
       });
 
-       // Log action
-       await auditService.log({
-         user_id: req.user.user_id,
-         action: 'user_unlock',
-         entity_type: 'user',
-         entity_id: id,
-         ip_address: req.ip,
-         user_agent: req.get('user-agent')
-       });
+      // Log action
+      await auditService.log({
+        user_id: req.user.user_id,
+        action: 'user_unlock',
+        entity_type: 'user',
+        entity_id: id,
+        ip_address: req.ip,
+        user_agent: req.get('user-agent')
+      });
 
-       try {
-         await emailService.sendTemplate('accountReactivated', user.email, {
-           Client_Name: user.full_name,
-           Date: new Date().toLocaleDateString('en-GB')
-         });
-       } catch (emailErr) {
-         logger.warn('Account reactivated email failed:', emailErr.message);
-       }
+      try {
+        await emailService.sendTemplate('accountReactivated', user.email, {
+          Client_Name: user.full_name,
+          Date: new Date().toLocaleDateString('en-GB')
+        });
+      } catch (emailErr) {
+        logger.warn('Account reactivated email failed:', emailErr.message);
+      }
 
-       res.json({
-         success: true,
-         message: 'User unlocked successfully'
-       });
+      res.json({
+        success: true,
+        message: 'User unlocked successfully'
+      });
     } catch (error) {
       next(error);
     }
@@ -386,51 +386,89 @@ class UserController {
    * Reset user password (Admin)
    * POST /api/v1/users/:id/reset-password
    */
+  // async resetPassword(req, res, next) {
+  //   try {
+  //     const { id } = req.params;
+
+  //     const user = await userService.findById(parseInt(id));
+
+  //     if (!user) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         message: 'User not found'
+  //       });
+  //     }
+
+  //     // Generate temporary password
+  //     const tempPassword = crypto.randomBytes(8).toString('hex');
+
+  //     // Hash password
+  //     const passwordHash = await bcrypt.hash(
+  //       tempPassword,
+  //       parseInt(process.env.BCRYPT_ROUNDS) || 12
+  //     );
+
+  //     await userService.update(parseInt(id), {
+  //       password_hash: passwordHash,
+  //       must_change_password: true,
+  //       updated_by: req.user.user_id
+  //     });
+
+  //     // Log action
+  //     await auditService.log({
+  //       user_id: req.user.user_id,
+  //       action: 'password_reset_admin',
+  //       entity_type: 'user',
+  //       entity_id: id,
+  //       ip_address: req.ip,
+  //       user_agent: req.get('user-agent')
+  //     });
+
+  //     res.json({
+  //       success: true,
+  //       message: 'Password reset successfully',
+  //       data: {
+  //         temporaryPassword: tempPassword
+  //       }
+  //     });
+  //   } catch (error) {
+  //     next(error);
+  //   }
+  // }
   async resetPassword(req, res, next) {
     try {
       const { id } = req.params;
+      const { password, sendEmail = true } = req.body;  // ← read from body
 
       const user = await userService.findById(parseInt(id));
-      
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-      // Generate temporary password
-      const tempPassword = crypto.randomBytes(8).toString('hex');
-
-      // Hash password
-      const passwordHash = await bcrypt.hash(
-        tempPassword,
-        parseInt(process.env.BCRYPT_ROUNDS) || 12
-      );
+      // Use provided password or generate random one
+      const tempPassword = password || crypto.randomBytes(8).toString('hex');
+      const passwordHash = await bcrypt.hash(tempPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
 
       await userService.update(parseInt(id), {
         password_hash: passwordHash,
-        must_change_password: true,
-        updated_by: req.user.user_id
+        require_password_change: true,   // force change on next login
+        updated_by: req.user.user_id,
       });
 
-      // Log action
+      // Only email if requested (auto-generate mode)
+      if (sendEmail) {
+        await emailService.sendPasswordResetByAdmin(user.email, user.full_name, tempPassword);
+      }
+
       await auditService.log({
         user_id: req.user.user_id,
         action: 'password_reset_admin',
         entity_type: 'user',
         entity_id: id,
+        new_values: { sendEmail },
         ip_address: req.ip,
-        user_agent: req.get('user-agent')
+        user_agent: req.get('user-agent'),
       });
 
-      res.json({
-        success: true,
-        message: 'Password reset successfully',
-        data: {
-          temporaryPassword: tempPassword
-        }
-      });
+      res.json({ success: true, message: sendEmail ? 'Password reset and emailed to user' : 'Password reset successfully' });
     } catch (error) {
       next(error);
     }
@@ -446,7 +484,7 @@ class UserController {
       const { reason, walletSettled, settlementMethod, transactionReference, settlementNotes, settlementDate } = req.body;
 
       const user = await userService.findById(parseInt(id));
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -490,32 +528,32 @@ class UserController {
         user_agent: req.get('user-agent')
       });
 
-       // Log settlement if done inline
-       if (walletSettled) {
-         await auditService.log({
-           user_id: req.user.user_id,
-           action: 'wallet_settlement',
-           entity_type: 'user',
-           entity_id: parseInt(id),
-           new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
-           ip_address: req.ip,
-           user_agent: req.get('user-agent')
-         });
-       }
+      // Log settlement if done inline
+      if (walletSettled) {
+        await auditService.log({
+          user_id: req.user.user_id,
+          action: 'wallet_settlement',
+          entity_type: 'user',
+          entity_id: parseInt(id),
+          new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
+          ip_address: req.ip,
+          user_agent: req.get('user-agent')
+        });
+      }
 
-       try {
-         await emailService.sendTemplate('accountBlocked', user.email, {
-           Client_Name: user.full_name,
-           Date: new Date().toLocaleDateString('en-GB')
-         });
-       } catch (emailErr) {
-         logger.warn('Permanent block email failed:', emailErr.message);
-       }
+      try {
+        await emailService.sendTemplate('accountBlocked', user.email, {
+          Client_Name: user.full_name,
+          Date: new Date().toLocaleDateString('en-GB')
+        });
+      } catch (emailErr) {
+        logger.warn('Permanent block email failed:', emailErr.message);
+      }
 
-       res.json({
-         success: true,
-         message: 'User permanently blocked'
-       });
+      res.json({
+        success: true,
+        message: 'User permanently blocked'
+      });
     } catch (error) {
       next(error);
     }
@@ -531,7 +569,7 @@ class UserController {
       const { settlementMethod, transactionReference, settlementNotes, settlementDate } = req.body;
 
       const user = await userService.findById(parseInt(id));
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -555,33 +593,33 @@ class UserController {
         updated_by: req.user.user_id
       });
 
-       // Log action
-       await auditService.log({
-   user_id: req.user.user_id,
-   action: 'wallet_settlement',
-   entity_type: 'user',
-   entity_id: parseInt(id),
-   new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
-   ip_address: req.ip,
-   user_agent: req.get('user-agent')
-});
+      // Log action
+      await auditService.log({
+        user_id: req.user.user_id,
+        action: 'wallet_settlement',
+        entity_type: 'user',
+        entity_id: parseInt(id),
+        new_values: { settlementMethod, transactionReference, settlementNotes, settlementDate },
+        ip_address: req.ip,
+        user_agent: req.get('user-agent')
+      });
 
-       try {
-         await emailService.sendTemplate('walletBalanceSettled', user.email, {
-           Client_Name: user.full_name,
-           Amount: user.wallet_balance || 0,
-           Currency: 'USD',
-           Wallet_Balance: 0,
-           Date: settlementDate || new Date().toLocaleDateString('en-GB')
-         });
-       } catch (emailErr) {
-         logger.warn('Wallet settled email failed:', emailErr.message);
-       }
+      try {
+        await emailService.sendTemplate('walletBalanceSettled', user.email, {
+          Client_Name: user.full_name,
+          Amount: user.wallet_balance || 0,
+          Currency: 'USD',
+          Wallet_Balance: 0,
+          Date: settlementDate || new Date().toLocaleDateString('en-GB')
+        });
+      } catch (emailErr) {
+        logger.warn('Wallet settled email failed:', emailErr.message);
+      }
 
-       res.json({
-         success: true,
-         message: 'Wallet settled successfully'
-       });
+      res.json({
+        success: true,
+        message: 'Wallet settled successfully'
+      });
     } catch (error) {
       next(error);
     }
@@ -591,113 +629,113 @@ class UserController {
    * Get viewer accounts for a b2b_client
    * GET /api/v1/users/:id/viewer-accounts
    */
-//   async getViewerAccounts(req, res, next) {
-//     try {
-//       const { id } = req.params;
+  //   async getViewerAccounts(req, res, next) {
+  //     try {
+  //       const { id } = req.params;
 
-//       const parentUser = await userService.findById(parseInt(id));
-//       if (!parentUser) {
-//         return res.status(404).json({ success: false, message: 'User not found' });
-//       }
-//       if (parentUser.user_type !== 'b2b_client') {
-//         return res.status(400).json({ success: false, message: 'This user is not a b2b_client' });
-//       }
+  //       const parentUser = await userService.findById(parseInt(id));
+  //       if (!parentUser) {
+  //         return res.status(404).json({ success: false, message: 'User not found' });
+  //       }
+  //       if (parentUser.user_type !== 'b2b_client') {
+  //         return res.status(400).json({ success: false, message: 'This user is not a b2b_client' });
+  //       }
 
-//       const viewers = await userService.getViewersByParent(parseInt(id));
+  //       const viewers = await userService.getViewersByParent(parseInt(id));
 
-//       res.json({ success: true, data: viewers });
-//     } catch (error) {
-//       next(error);
-//     }
-//   }
+  //       res.json({ success: true, data: viewers });
+  //     } catch (error) {
+  //       next(error);
+  //     }
+  //   }
 
   /**
    * Create viewer account under a b2b_client
    * POST /api/v1/users/:id/viewer-accounts
    */
   async getViewerAccounts(req, res, next) {
-  try {
-    const { id } = req.params;
+    try {
+      const { id } = req.params;
 
-    const b2bClient = await userService.findById(parseInt(id));
-    if (!b2bClient) {
-      return res.status(404).json({ success: false, message: 'B2B client not found' });
+      const b2bClient = await userService.findById(parseInt(id));
+      if (!b2bClient) {
+        return res.status(404).json({ success: false, message: 'B2B client not found' });
+      }
+
+      const viewers = await userService.getViewerAccounts(parseInt(id));
+
+      res.json({ success: true, data: viewers });
+    } catch (error) {
+      next(error);
     }
-
-    const viewers = await userService.getViewerAccounts(parseInt(id));
-
-    res.json({ success: true, data: viewers });
-  } catch (error) {
-    next(error);
   }
-}
 
-async createViewerAccount(req, res, next) {
-  try {
-    const { id } = req.params;          // b2b_client_id
-    const { name, email, permissions } = req.body;
-    const requestingUser = req.user;
+  async createViewerAccount(req, res, next) {
+    try {
+      const { id } = req.params;          // b2b_client_id
+      const { name, email, permissions } = req.body;
+      const requestingUser = req.user;
 
-    // Validate the b2b client exists
-    const b2bClient = await userService.findById(parseInt(id));
-    if (!b2bClient || b2bClient.user_type !== 'b2b_client') {
-      return res.status(404).json({ success: false, message: 'B2B client not found' });
+      // Validate the b2b client exists
+      const b2bClient = await userService.findById(parseInt(id));
+      if (!b2bClient || b2bClient.user_type !== 'b2b_client') {
+        return res.status(404).json({ success: false, message: 'B2B client not found' });
+      }
+
+      // Check email not already taken
+      const existing = await userService.findByEmail(email);
+      if (existing) {
+        return res.status(400).json({ success: false, message: 'Email already in use' });
+      }
+
+      // Generate a temporary password
+      const tempPassword = crypto.randomBytes(8).toString('hex');
+      const passwordHash = await bcrypt.hash(
+        tempPassword,
+        parseInt(process.env.BCRYPT_ROUNDS) || 12
+      );
+
+      // Create the user with viewer type
+      const viewerUserId = await userService.create({
+        email,
+        password_hash: passwordHash,
+        full_name: name,
+        company_name: b2bClient.company_name,  // inherit parent company
+        role_id: 4,       // viewer role
+        user_type: 'viewer',
+        status: 'active',
+        must_change_password: true,
+        created_by: requestingUser.user_id
+      });
+
+      // Link viewer to b2b client  <-- THIS is the missing piece
+      await userService.createViewerLink(
+        viewerUserId,
+        parseInt(id),
+        permissions || null,
+        requestingUser.user_id
+      );
+
+      // Audit log
+      await auditService.log({
+        user_id: requestingUser.user_id,
+        action: 'viewer_account_creation',
+        entity_type: 'user',
+        entity_id: viewerUserId,
+        new_values: { email, name, b2b_client_id: parseInt(id), permissions },
+        ip_address: req.ip,
+        user_agent: req.get('user-agent')
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Viewer account created successfully',
+        data: { userId: viewerUserId, temporaryPassword: tempPassword }
+      });
+    } catch (error) {
+      next(error);
     }
-
-    // Check email not already taken
-    const existing = await userService.findByEmail(email);
-    if (existing) {
-      return res.status(400).json({ success: false, message: 'Email already in use' });
-    }
-
-    // Generate a temporary password
-    const tempPassword = crypto.randomBytes(8).toString('hex');
-    const passwordHash = await bcrypt.hash(
-      tempPassword,
-      parseInt(process.env.BCRYPT_ROUNDS) || 12
-    );
-
-    // Create the user with viewer type
-    const viewerUserId = await userService.create({
-      email,
-      password_hash: passwordHash,
-      full_name: name,
-      company_name: b2bClient.company_name,  // inherit parent company
-      role_id: 4,       // viewer role
-      user_type: 'viewer',
-      status: 'active',
-      must_change_password: true,
-      created_by: requestingUser.user_id
-    });
-
-    // Link viewer to b2b client  <-- THIS is the missing piece
-    await userService.createViewerLink(
-      viewerUserId,
-      parseInt(id),
-      permissions || null,
-      requestingUser.user_id
-    );
-
-    // Audit log
-    await auditService.log({
-      user_id: requestingUser.user_id,
-      action: 'viewer_account_creation',
-      entity_type: 'user',
-      entity_id: viewerUserId,
-      new_values: { email, name, b2b_client_id: parseInt(id), permissions },
-      ip_address: req.ip,
-      user_agent: req.get('user-agent')
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Viewer account created successfully',
-      data: { userId: viewerUserId, temporaryPassword: tempPassword }
-    });
-  } catch (error) {
-    next(error);
   }
-}
 
   /**
    * Get user product access
@@ -710,11 +748,11 @@ async createViewerAccount(req, res, next) {
   async getUserProductConfig(req, res, next) {
     try {
       const userId = parseInt(req.params.id);
-      const data   = await userProductService.getUserProductConfig(userId);
+      const data = await userProductService.getUserProductConfig(userId);
       res.json({ success: true, data });
     } catch (err) { next(err); }
   }
- 
+
   /**
    * PUT /api/v1/users/:id/products
    * Admin: save visibility + custom pricing config for a user
@@ -722,21 +760,21 @@ async createViewerAccount(req, res, next) {
    */
   async saveUserProductConfig(req, res, next) {
     try {
-      const userId      = parseInt(req.params.id);
+      const userId = parseInt(req.params.id);
       const { configs } = req.body;
- 
+
       await userProductService.saveUserProductConfig(userId, configs, req.user.user_id);
- 
+
       await auditService.log({
-        user_id:     req.user.user_id,
-        action:      'user_product_config_saved',
+        user_id: req.user.user_id,
+        action: 'user_product_config_saved',
         entity_type: 'user',
-        entity_id:   String(userId),
-        new_values:  { configCount: configs.length },
-        ip_address:  req.ip,
-        user_agent:  req.get('User-Agent'),
+        entity_id: String(userId),
+        new_values: { configCount: configs.length },
+        ip_address: req.ip,
+        user_agent: req.get('User-Agent'),
       });
- 
+
       res.json({ success: true, message: 'Product configuration saved successfully' });
     } catch (err) { next(err); }
   }

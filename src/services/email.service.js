@@ -90,6 +90,34 @@ class EmailService {
   async sendWelcomeEmail(email, name) {
     return this.sendEmail(email, 'Welcome!', `Welcome to Card Cove, ${name}!`, `Welcome ${name}!`);
   }
+  async sendPasswordResetByAdmin(email, name, tempPassword) {
+    const html = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+        <div style="background:#1d4ed8;padding:24px;border-radius:8px 8px 0 0;">
+          <h2 style="color:#fff;margin:0;">Password Reset</h2>
+          <p style="color:#bfdbfe;margin:4px 0 0;">CardCove B2B Portal</p>
+        </div>
+        <div style="border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+          <p>Hi ${name},</p>
+          <p>Your password has been reset by an administrator. Your temporary password is:</p>
+          <div style="background:#f3f4f6;border-radius:6px;padding:16px;text-align:center;font-family:monospace;font-size:20px;font-weight:bold;letter-spacing:2px;color:#111827;margin:16px 0;">
+            ${tempPassword}
+          </div>
+          <p style="color:#dc2626;font-weight:600;">⚠️ You will be required to change this password on your next login.</p>
+          <p style="color:#6b7280;font-size:13px;margin-top:24px;">
+            If you did not expect this email, please contact your administrator immediately.
+          </p>
+          <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;"/>
+          <p style="color:#9ca3af;font-size:12px;margin:0;">CardCove B2B Portal</p>
+        </div>
+      </div>`;
+    return this.sendEmail(
+      email,
+      'Your CardCove password has been reset',
+      html,
+      `Hi ${name}, your temporary password is: ${tempPassword}. You must change it on next login.`
+    );
+  }
 }
 
 module.exports = new EmailService();

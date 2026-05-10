@@ -549,6 +549,10 @@ ALTER TABLE product_skus
 ALTER TABLE digital_codes
   ADD UNIQUE KEY uq_sku_code (sku_id, code(255));
 
+ALTER TABLE users
+  ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER `2fa_secret`;
+
+
 -- ============================================
 -- INITIAL DATA
 -- ============================================

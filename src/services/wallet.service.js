@@ -110,7 +110,7 @@ class WalletService {
     let params = [];
 
     if (walletId) { whereClauses.push('t.wallet_id = ?'); params.push(walletId); }
-    if (userId)   { whereClauses.push('t.user_id = ?');   params.push(userId); }
+    if (userId) { whereClauses.push('t.user_id = ?'); params.push(userId); }
 
     const whereClause = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
@@ -160,7 +160,7 @@ class WalletService {
     if (!wallet) throw new Error('Wallet not found');
 
     const balanceBefore = parseFloat(wallet.balance);
-    const balanceAfter  = balanceBefore + parseFloat(amount);
+    const balanceAfter = balanceBefore + parseFloat(amount);
 
     await db.query(
       'UPDATE wallets SET balance = ?, updated_at = NOW() WHERE wallet_id = ?',
@@ -173,7 +173,7 @@ class WalletService {
           description, reference_type, reference_id, processed_by)
        VALUES (?, ?, 'credit', ?, ?, ?, ?, ?, ?, ?, ?)`,
       [walletId, userId, amount, wallet.currency, balanceBefore, balanceAfter,
-       description, referenceType, referenceId, processedBy]
+        description, referenceType, referenceId, processedBy]
     );
 
     return { transactionId: result.insertId, balanceBefore, balanceAfter };
@@ -197,7 +197,7 @@ class WalletService {
     let whereClauses = [];
     let params = [];
 
-    if (status) { whereClauses.push('r.status = ?');  params.push(status); }
+    if (status) { whereClauses.push('r.status = ?'); params.push(status); }
     if (userId) { whereClauses.push('r.user_id = ?'); params.push(userId); }
 
     const whereClause = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -226,7 +226,7 @@ class WalletService {
 
     const countSql = `SELECT COUNT(*) AS total FROM topup_requests r ${whereClause}`;
 
-    const rows     = await db.query(sql, [...params, parseInt(limit), parseInt(offset)]);
+    const rows = await db.query(sql, [...params, parseInt(limit), parseInt(offset)]);
     const countRow = await db.queryOne(countSql, params);
 
     return {
@@ -298,47 +298,63 @@ class WalletService {
   // ADMIN: All transactions across wallets
   // ─────────────────────────────────────────────
 
-  async getAllTransactions({ page = 1, limit = 20, userId, type } = {}) {
+  async getAllTransactions({ page = 1, limit = 20, userId, type, dateFrom, dateTo } = {}) {
     let whereClauses = [];
     let params = [];
-    if (userId) { whereClauses.push('t.user_id = ?');           params.push(userId); }
-    if (type)   { whereClauses.push('t.transaction_type = ?');  params.push(type); }
+
+    if (userId) { whereClauses.push('t.user_id = ?'); params.push(userId); }
+    if (type) { whereClauses.push('t.transaction_type = ?'); params.push(type); }
+    if (dateFrom) { whereClauses.push('DATE(t.created_at) >= ?'); params.push(dateFrom); }
+    if (dateTo) { whereClauses.push('DATE(t.created_at) <= ?'); params.push(dateTo); }
+
+    // Default to today if no date range provided
+    if (!dateFrom && !dateTo) {
+      whereClauses.push('DATE(t.created_at) = CURDATE()');
+    }
 
     const whereClause = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
     const offset = (page - 1) * limit;
 
     const sql = `
-      SELECT
-        t.transaction_id   AS id,
-        t.transaction_type AS type,
-        t.amount,
-        t.currency,
-        t.balance_before,
-        t.balance_after,
-        t.description,
-        t.reference_type,
-        t.reference_id,
-        t.created_at,
-        u.full_name        AS userName,
-        u.email            AS userEmail,
-        u.company_name     AS company,
-        proc.full_name     AS processedByName
-      FROM wallet_transactions t
-      JOIN  users u    ON t.user_id      = u.user_id
-      LEFT JOIN users proc ON t.processed_by = proc.user_id
-      ${whereClause}
-      ORDER BY t.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
-    const countSql = `SELECT COUNT(*) AS total FROM wallet_transactions t ${whereClause}`;
+    SELECT
+      t.transaction_id   AS id,
+      t.transaction_type AS type,
+      t.amount,
+      t.currency,
+      t.balance_before,
+      t.balance_after,
+      t.description,
+      t.reference_type,
+      t.reference_id,
+      t.created_at,
+      u.full_name        AS userName,
+      u.email            AS userEmail,
+      u.company_name     AS company,
+      proc.full_name     AS processedByName
+    FROM wallet_transactions t
+    JOIN  users u    ON t.user_id      = u.user_id
+    LEFT JOIN users proc ON t.processed_by = proc.user_id
+    ${whereClause}
+    ORDER BY t.created_at DESC
+    LIMIT ? OFFSET ?
+  `;
+    const countSql = `
+    SELECT COUNT(*) AS total
+    FROM wallet_transactions t
+    ${whereClause}
+  `;
 
-    const rows     = await db.query(sql, [...params, parseInt(limit), parseInt(offset)]);
+    const rows = await db.query(sql, [...params, parseInt(limit), parseInt(offset)]);
     const countRow = await db.queryOne(countSql, params);
 
     return {
       data: rows,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total: countRow.total,
-        totalPages: Math.ceil(countRow.total / limit) },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: countRow.total,
+        totalPages: Math.ceil(countRow.total / limit),
+      },
     };
   }
 }

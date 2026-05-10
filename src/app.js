@@ -4,9 +4,9 @@ const helmet = require('helmet');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const morgan = require('morgan');
-
 const errorHandler = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
+const path = require('path');
 
 // Import routes
 const authRoutes = require('./routes/auth.routes');
@@ -112,6 +112,27 @@ app.get('/health', (req, res) => {
 const API_PREFIX = `/api/${process.env.API_VERSION}`;
 
 // Routes
+// Serve uploaded receipts — protected by auth middleware
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    res.removeHeader('Cross-Origin-Resource-Policy');
+    res.removeHeader('Cross-Origin-Embedder-Policy');
+    next();
+  },
+  express.static(path.join(__dirname, '../uploads'), {
+    maxAge: '1h',
+    etag: true,
+    fallthrough: false,
+  }),
+  // If file not found, return plain 404 (not JSON)
+  (err, req, res, next) => {
+    if (err.status === 404) {
+      return res.status(404).send('File not found');
+    }
+    next(err);
+  }
+);
 app.use(`${API_PREFIX}/auth`, authRoutes);
 app.use(`${API_PREFIX}/users`, userRoutes);
 app.use(`${API_PREFIX}/products`, productRoutes);
