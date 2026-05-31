@@ -2,25 +2,26 @@
 // Client portal routes — accessible to b2b_client and viewer roles only.
 'use strict';
 
-const express                  = require('express');
-const router                   = express.Router();
-const multer                   = require('multer');
-const userProductService       = require('../services/userProduct.service');
-const clientDashboardService   = require('../services/clientDashboard.service');
-const userController           = require('../controllers/user.controller'); // Import userController
-const { protect }              = require('../middleware/auth');
-const { query, param, body }   = require('express-validator');
-const { validate }             = require('../middleware/validation');
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const userProductService = require('../services/userProduct.service');
+const clientDashboardService = require('../services/clientDashboard.service');
+const userController = require('../controllers/user.controller'); // Import userController
+const { protect } = require('../middleware/auth');
+const { query, param, body } = require('express-validator');
+const { validate } = require('../middleware/validation');
+      const auditService = require('../services/audit.service');
 
 const ticketUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ['image/jpeg','image/png','image/webp','application/pdf',
-                     'text/csv','application/vnd.ms-excel',
-                     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                     'application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                     'text/plain'];
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf',
+      'text/csv', 'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'text/plain'];
     allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('File type not allowed'), false);
   },
 });
@@ -59,7 +60,7 @@ router.get('/dashboard', async (req, res, next) => {
 // GET /api/v1/client/orders
 router.get('/orders',
   [
-    query('status').optional().isIn(['pending','processing','completed','failed','cancelled']),
+    query('status').optional().isIn(['pending', 'processing', 'completed', 'failed', 'cancelled']),
     query('page').optional().isInt({ min: 1 }),
     query('limit').optional().isInt({ min: 1, max: 100 }),
   ],
@@ -89,6 +90,15 @@ router.get('/tickets',
       const { page = 1, limit = 20 } = req.query;
       const result = await clientDashboardService.getTickets(req.user.user_id, {
         page: parseInt(page), limit: parseInt(limit),
+      });
+      await auditService.log({
+        user_id: req.user.user_id,
+        action: 'support_ticket_created',
+        entity_type: 'support_ticket',
+        entity_id: String(ticket.ticket_id || ticket.id),
+        new_values: { title, hasAttachment: !!attachmentName },
+        ip_address: req.ip,
+        user_agent: req.get('user-agent'),
       });
       res.json({ success: true, ...result });
     } catch (err) { next(err); }
@@ -150,7 +160,7 @@ router.get('/products/:id',
 
 router.get('/product-categories', async (req, res, next) => {
   try {
-    const result     = await userProductService.getClientProducts(req.user.user_id, { limit: 9999 });
+    const result = await userProductService.getClientProducts(req.user.user_id, { limit: 9999 });
     const categories = [...new Set(result.data.map(p => p.category).filter(Boolean))].sort();
     res.json({ success: true, data: categories });
   } catch (err) { next(err); }

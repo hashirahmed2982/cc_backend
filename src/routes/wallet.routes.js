@@ -71,19 +71,20 @@ router.get('/topup/:id/receipt', protect, isAdmin, async (req, res, next) => {
       [req.params.id]
     );
 
-    logger.info(`[Receipt] Request ID: ${req.params.id}`);
-    logger.info(`[Receipt] DB row: ${JSON.stringify(row)}`);
-
     if (!row?.receipt_url) {
-      logger.warn(`[Receipt] No receipt_url found for request_id ${req.params.id}`);
       return res.status(404).json({ success: false, message: 'No receipt found' });
     }
 
-    const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-    const url     = `${baseUrl}${row.receipt_url}`;
+    // Prefer explicit env var, then fall back to deriving from the request
+    const baseUrl = process.env.API_BASE_URL
+      || `${req.protocol}://${req.get('host')}`;
 
-    logger.info(`[Receipt] API_BASE_URL env: ${process.env.API_BASE_URL}`);
-    logger.info(`[Receipt] Built URL: ${url}`);
+    // Ensure receipt_url starts with / before appending
+    const path = row.receipt_url.startsWith('/')
+      ? row.receipt_url
+      : `/${row.receipt_url}`;
+
+    const url = `${baseUrl}${path}`;
 
     res.json({ success: true, data: { url, expiresIn: null } });
   } catch (err) {

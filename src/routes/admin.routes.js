@@ -8,7 +8,7 @@ const { protect, isAdmin }  = require('../middleware/auth');
 // GET /api/v1/admin/dashboard
 router.get('/dashboard', protect, isAdmin, async (req, res, next) => {
   try {
-    const data = await adminDashboardService.getSummary();
+     const data = await adminDashboardService.getSummary(req.user);
     res.json({ success: true, data });
   } catch (err) { next(err); }
 });

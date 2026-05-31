@@ -5,7 +5,7 @@ const { protect, requirePasswordChange } = require('../middleware/auth');
 const { validate } = require('../middleware/validation');
 const userService = require('../services/user.service');
 const { body } = require('express-validator');
-
+const auditService = require('../services/audit.service');
 // Validation rules
 const loginValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
@@ -88,6 +88,15 @@ router.put('/profile', async (req, res, next) => {
     }
 
     await userService.update(req.user.user_id, updates);
+    await auditService.log({
+      user_id: req.user.user_id,
+      action: 'admin_profile_updated',
+      entity_type: 'user',
+      entity_id: String(req.user.user_id),
+      new_values: updates,
+      ip_address: req.ip,
+      user_agent: req.get('user-agent'),
+    });
     res.json({ success: true, message: 'Profile updated' });
   } catch (err) { next(err); }
 });

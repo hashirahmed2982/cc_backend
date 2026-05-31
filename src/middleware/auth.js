@@ -42,11 +42,11 @@ const protect = async (req, res, next) => {
       return next(new AppError('Session expired. Please log in again.', 401));
     }
 
-    // 5) Check session timeout (5 minutes inactivity)
-    const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT) || 300000; // 5 minutes
+    // 5) Check session timeout (15 minutes inactivity)
+    const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT) || 900000; // 15 minutes default
     const lastActivity = new Date(session.last_activity);
     const now = new Date();
-    
+
     if (now - lastActivity > sessionTimeout) {
       await sessionService.delete(session.session_id);
       return next(new AppError('Session timed out due to inactivity. Please log in again.', 401));

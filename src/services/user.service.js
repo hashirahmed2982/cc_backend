@@ -2,19 +2,41 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 
 class UserService {
+  _normalizeEmail(email) {
+    if (!email) return email;
+    const lower = email.toLowerCase().trim();
+    const [local, domain] = lower.split('@');
+    if (!domain) return lower;
+
+    // Gmail and googlemail treat dots as insignificant
+    const gmailDomains = ['gmail.com', 'googlemail.com'];
+    if (gmailDomains.includes(domain)) {
+      return local.replace(/\./g, '') + '@' + domain;
+    }
+    return lower;
+  }
   /**
    * Find user by email
    */
   async findByEmail(email) {
     try {
+      const normalized = this._normalizeEmail(email);
+
+      // For Gmail: strip dots from stored emails too, then compare
       const sql = `
-        SELECT u.*, r.role_name, r.permissions
-        FROM users u
-        LEFT JOIN roles r ON u.role_id = r.role_id
-        WHERE u.email = ?
-        LIMIT 1
-      `;
-      return await db.queryOne(sql, [email]);
+      SELECT u.*, r.role_name, r.permissions
+      FROM users u
+      LEFT JOIN roles r ON u.role_id = r.role_id
+      WHERE LOWER(
+        CASE 
+          WHEN LOWER(u.email) LIKE '%@gmail.com' OR LOWER(u.email) LIKE '%@googlemail.com'
+          THEN CONCAT(REPLACE(SUBSTRING_INDEX(LOWER(u.email), '@', 1), '.', ''), '@', SUBSTRING_INDEX(LOWER(u.email), '@', -1))
+          ELSE LOWER(u.email)
+        END
+      ) = ?
+      LIMIT 1
+    `;
+      return await db.queryOne(sql, [normalized]);
     } catch (error) {
       logger.error('Error finding user by email:', error);
       throw error;
@@ -82,7 +104,7 @@ class UserService {
   async update(userId, updates) {
     try {
       const allowedFields = [
-        'full_name', 'phone', 'company_name', 'status', 'role_id','email',
+        'full_name', 'phone', 'company_name', 'status', 'role_id', 'email',
         'is_2fa_enabled', '2fa_secret', 'failed_login_attempts',
         'locked_until', 'last_login', 'email_verified', 'password_hash',
         'must_change_password', 'updated_by', 'permanent_block_reason',
@@ -258,7 +280,7 @@ class UserService {
         INSERT INTO wallets (user_id, balance, currency, status)
         VALUES (?, 0.00, 'USD', 'active')
       `;
-      
+
       const result = await db.query(sql, [userId]);
       return result.insertId;
     } catch (error) {
@@ -282,31 +304,31 @@ class UserService {
   /**
  * Create viewer account link (viewer_user_id -> b2b_client_id)
  */
-async createViewerLink(viewerUserId, b2bClientId, permissions, createdBy) {
-  try {
-    const sql = `
+  async createViewerLink(viewerUserId, b2bClientId, permissions, createdBy) {
+    try {
+      const sql = `
       INSERT INTO viewer_accounts (viewer_user_id, b2b_client_id, permissions, created_by)
       VALUES (?, ?, ?, ?)
     `;
-    const result = await db.query(sql, [
-      viewerUserId,
-      b2bClientId,
-      permissions ? JSON.stringify(permissions) : null,
-      createdBy || null
-    ]);
-    return result.insertId;
-  } catch (error) {
-    logger.error('Error creating viewer link:', error);
-    throw error;
+      const result = await db.query(sql, [
+        viewerUserId,
+        b2bClientId,
+        permissions ? JSON.stringify(permissions) : null,
+        createdBy || null
+      ]);
+      return result.insertId;
+    } catch (error) {
+      logger.error('Error creating viewer link:', error);
+      throw error;
+    }
   }
-}
 
-/**
- * Get all viewer accounts for a b2b_client
- */
-async getViewerAccounts(b2bClientId) {
-  try {
-    const sql = `
+  /**
+   * Get all viewer accounts for a b2b_client
+   */
+  async getViewerAccounts(b2bClientId) {
+    try {
+      const sql = `
       SELECT 
         u.user_id, u.email, u.full_name, u.status,
         u.last_login, u.created_at,
@@ -316,12 +338,12 @@ async getViewerAccounts(b2bClientId) {
       WHERE va.b2b_client_id = ?
       ORDER BY u.created_at DESC
     `;
-    return await db.query(sql, [b2bClientId]);
-  } catch (error) {
-    logger.error('Error getting viewer accounts:', error);
-    throw error;
+      return await db.query(sql, [b2bClientId]);
+    } catch (error) {
+      logger.error('Error getting viewer accounts:', error);
+      throw error;
+    }
   }
-}
 }
 
 

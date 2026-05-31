@@ -133,6 +133,7 @@ app.use(
     next(err);
   }
 );
+app.use('/api/v1/reports', require('./routes/reports.routes'));
 app.use(`${API_PREFIX}/auth`, authRoutes);
 app.use(`${API_PREFIX}/users`, userRoutes);
 app.use(`${API_PREFIX}/products`, productRoutes);

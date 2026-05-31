@@ -209,8 +209,8 @@ class UserController {
         user_id: req.user.user_id,
         action: 'user_update',
         entity_type: 'user',
-        entity_id: req.user.user_id,
-        oldValues: oldValues,
+        entity_id: id,                 // ← FIXED: target user's ID
+        old_values: oldValues,
         new_values: updates,
         ip_address: req.ip,
         user_agent: req.get('user-agent')
@@ -289,7 +289,7 @@ class UserController {
         action: 'user_settings_update',
         entity_type: 'user',
         entity_id: userId,
-        oldValues: oldValues,
+        old_values: oldValues,
         new_values: updates,
         ip_address: req.ip,
         user_agent: req.get('user-agent')
@@ -529,6 +529,7 @@ class UserController {
       await userService.update(parseInt(id), {
         password_hash: passwordHash,
         require_password_change: true,   // force change on next login
+        must_change_password: true,
         updated_by: req.user.user_id,
       });
 
