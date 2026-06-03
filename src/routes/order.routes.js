@@ -75,5 +75,14 @@ router.post('/admin/:id/complete',
   validate,
   orderController.completeOrder
 );
+router.post('/admin/:id/cancel',
+  isAdmin,
+  [
+    param('id').isInt().withMessage('Valid order ID required'),
+    body('reason').optional().trim(),
+  ],
+  validate,
+  orderController.cancelOrder
+);
 
 module.exports = router;

@@ -17,8 +17,8 @@ class EmailService {
             user: 'api',
             pass: process.env.MAILTRAP_API_TOKEN
           },
-          debug: true, // Enable debug output
-          logger: true // Log to console
+          debug: true,
+          logger: true
         });
         
         this.transporter.verify((error) => {
@@ -39,15 +39,16 @@ class EmailService {
     }
   }
 
-  async sendEmail(to, subject, html, text) {
+  async sendEmail(to, subject, html, text, attachments = []) {
     if (!this.isConfigured) {
-      logger.info(`📧 DEV LOG: Email to ${to} | Sub: ${subject}`);
+      logger.info(`📧 DEV LOG: Email to ${to} | Sub: ${subject} | Attachments: ${attachments.length}`);
       return { messageId: 'dev-mode' };
     }
     try {
       const mailOptions = {
         from: `"${process.env.EMAIL_FROM_NAME || 'Card Cove'}" <${process.env.EMAIL_FROM}>`,
-        to, subject, html, text
+        to, subject, html, text,
+        attachments,
       };
       const info = await this.transporter.sendMail(mailOptions);
       logger.info(`Email sent: ${info.messageId}`);
@@ -90,6 +91,7 @@ class EmailService {
   async sendWelcomeEmail(email, name) {
     return this.sendEmail(email, 'Welcome!', `Welcome to Card Cove, ${name}!`, `Welcome ${name}!`);
   }
+
   async sendPasswordResetByAdmin(email, name, tempPassword) {
     const html = `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">

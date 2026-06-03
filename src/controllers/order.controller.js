@@ -131,23 +131,47 @@ class OrderController {
         user_agent: req.get('User-Agent'),
       });
 
-      try {
-        const order = await orderService.getOrderById(orderId);
-        await emailService.sendTemplate('orderFulfilled', order.client.email, {
-          Client_Name: order.client.full_name,
-          Order_ID: result.orderNumber,
-          Date: new Date().toLocaleDateString('en-GB'),
-          Amount: order.totalAmount,
-          Currency: 'USD',
-          Dashboard_URL: process.env.FRONTEND_URL + '/dashboard/orders'
-        });
-      } catch (emailErr) {
-        logger.warn('Order fulfilled email failed:', emailErr.message);
-      }
+      // try {
+      //   const order = await orderService.getOrderById(orderId);
+      //   await emailService.sendTemplate('orderFulfilled', order.client.email, {
+      //     Client_Name: order.client.full_name,
+      //     Order_ID: result.orderNumber,
+      //     Date: new Date().toLocaleDateString('en-GB'),
+      //     Amount: order.totalAmount,
+      //     Currency: 'USD',
+      //     Dashboard_URL: process.env.FRONTEND_URL + '/dashboard/orders'
+      //   });
+      // } catch (emailErr) {
+      //   logger.warn('Order fulfilled email failed:', emailErr.message);
+      // }
 
       res.json({
         success: true,
         message: `Order ${result.orderNumber} fulfilled and client notified`,
+        data: result,
+      });
+    } catch (err) { next(err); }
+  }
+  async cancelOrder(req, res, next) {
+    try {
+      const orderId = parseInt(req.params.id);
+      const { reason } = req.body;
+
+      const result = await orderService.cancelOrder(orderId, req.user.user_id, reason || '');
+
+      await auditService.log({
+        user_id: req.user.user_id,
+        action: 'order_cancelled_by_admin',
+        entity_type: 'order',
+        entity_id: String(orderId),
+        new_values: { cancelledBy: req.user.user_id, reason, refundAmount: result.refundAmount },
+        ip_address: req.ip,
+        user_agent: req.get('User-Agent'),
+      });
+
+      res.json({
+        success: true,
+        message: `Order ${result.orderNumber} cancelled. Refund of ${result.currency} ${result.refundAmount.toFixed(2)} issued to client wallet.`,
         data: result,
       });
     } catch (err) { next(err); }

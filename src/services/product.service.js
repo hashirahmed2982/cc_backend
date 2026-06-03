@@ -56,12 +56,22 @@ const PRODUCT_SELECT = `
     MIN(ps.supplier_sku_ref)  AS supplier_sku_ref,
     MIN(ps.realtime_price)    AS realtime_price,
     COALESCE(MAX(inv.unlimited_stock), 0)            AS unlimited_stock,
-    COALESCE(SUM(inv.stock_quantity),  0)            AS total_codes,
-    COALESCE(SUM(inv.available_qty),   0)            AS available_codes,
-    COALESCE(SUM(inv.stock_quantity) - SUM(inv.available_qty), 0) AS sold_codes
+    COALESCE(SUM(inv.available_qty),   0) AS available_codes,
+    COALESCE(dc_counts.total_codes,    0) AS total_codes,
+    COALESCE(dc_counts.sold_codes,     0) AS sold_codes
   FROM products p
-  LEFT JOIN product_skus ps ON ps.product_id = p.product_id AND ps.is_active = 1
-  LEFT JOIN inventory    inv ON inv.sku_id    = ps.sku_id
+  LEFT JOIN product_skus ps  ON ps.product_id = p.product_id AND ps.is_active = 1
+  LEFT JOIN inventory    inv ON inv.sku_id     = ps.sku_id
+  LEFT JOIN (
+    SELECT
+      ps2.product_id,
+      COUNT(*)                                             AS total_codes,
+      SUM(CASE WHEN dc.status = 'sold' THEN 1 ELSE 0 END) AS sold_codes
+    FROM product_skus ps2
+    JOIN digital_codes dc ON dc.sku_id = ps2.sku_id
+    WHERE ps2.is_active = 1
+    GROUP BY ps2.product_id
+  ) dc_counts ON dc_counts.product_id = p.product_id
 `;
 
 class ProductService {

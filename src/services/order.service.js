@@ -4,6 +4,8 @@
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
+const ZipEncrypted = require('archiver-zip-encrypted');
+const stream = require('stream');
 const emailService = require('./email.service');
 
 // ─── Decrypt codes (same key as product_service) ─────────────────────────────
@@ -32,6 +34,56 @@ function generateOrderNumber() {
   return `ORD-${ts}-${rand}`;
 }
 
+// ─── Derive ZIP password from email + orderNumber ─────────────────────────────
+// password = first 12 hex chars of SHA-256("email:orderNumber")
+// Deterministic — client can always re-derive from their own email + order number
+function deriveZipPassword(email, orderNumber) {
+  return crypto
+    .createHash('sha256')
+    .update(`${email.toLowerCase().trim()}:${orderNumber}`)
+    .digest('hex')
+    .slice(0, 12);
+}
+
+// ─── Build AES-256 encrypted ZIP buffer ──────────────────────────────────────
+// REPLACE the entire buildEncryptedCodesZip function with:
+function buildEncryptedCodesZip(orderNumber, fulfilledItems, password) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const output = new stream.PassThrough();
+    output.on('data',  c  => chunks.push(c));
+    output.on('end',   () => resolve(Buffer.concat(chunks)));
+    output.on('error', reject);
+
+    const archive = ZipEncrypted({
+      encryptionMethod: 'aes256',
+      password:         Buffer.from(String(password), 'utf-8'),
+      zlib:             { level: 9 },
+    });
+    archive.on('error', reject);
+    archive.pipe(output);
+
+    const lines = [
+      `CardCove B2B Portal — Order ${orderNumber}`,
+      `Generated: ${new Date().toUTCString()}`,
+      '='.repeat(60),
+      '',
+    ];
+    for (const item of fulfilledItems) {
+      lines.push(`Product: ${item.productName}`);
+      lines.push(`Delivered: ${item.delivered} code(s)`);
+      lines.push('-'.repeat(40));
+      item.codes.forEach((code, i) => lines.push(`${i + 1}. ${code}`));
+      lines.push('');
+    }
+
+    archive.append(lines.join('\n'), { name: `order_${orderNumber}_codes.txt` });
+
+    // finalize() is void in this version — listen to 'finish', not .then()
+    archive.on('finish', () => { /* output 'end' fires after pipe drains */ });
+    archive.finalize();
+  });
+}
 class OrderService {
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -236,6 +288,16 @@ class OrderService {
             item.skuId,
           ]
         );
+        // await db.query(
+        //   `UPDATE order_details
+        //       SET delivered_qty = delivered_qty + ?,
+        //           delivery_status = CASE
+        //             WHEN delivered_qty + ? >= quantity THEN 'completed'
+        //             ELSE 'partial'
+        //           END
+        //     WHERE order_id = ? AND sku_id = ?`,
+        //   [allocated.length, allocated.length, orderId, item.skuId]
+        // );
 
         totalFulfilled += allocated.length;
 
@@ -255,6 +317,7 @@ class OrderService {
           productName: item.productName,
           skuId: item.skuId,
           quantity: item.quantity,
+          unitPrice: item.unitPrice,
           delivered: allocated.length,
           pending: needed,
           reason: 'insufficient_inventory',
@@ -335,12 +398,21 @@ class OrderService {
       // Fulfill remaining
       const fulfillResult = await this._fulfillOrder(orderId, remainingItems, order.client_user_id);
 
-      // If still not all fulfilled just leave as processing
-      // If now all done, _fulfillOrder already set to completed
+      // Always mark order as completed when admin presses Complete
+      // await db.query(
+      //   `UPDATE orders
+      //       SET order_status = 'completed',
+      //           delivery_status = ?,
+      //           completed_at = NOW()
+      //     WHERE order_id = ?`,
+      //   [fulfillResult.pendingItems.length === 0 ? 'completed' : 'partial', orderId]
+      // );
 
-      // Send email with remaining codes
-      const user = { full_name: order.full_name, email: order.email };
-      await this._sendCompletionEmail(user, order.order_number, orderId, fulfillResult, order.currency);
+      // Send email with remaining codes (only if new codes were delivered)
+      if (fulfillResult.fulfilledItems.length > 0) {
+        const user = { full_name: order.full_name, email: order.email };
+        await this._sendCompletionEmail(user, order.order_number, orderId, fulfillResult, order.currency);
+      }
 
       // Audit
       await db.query(
@@ -349,10 +421,119 @@ class OrderService {
         [adminId, String(orderId), JSON.stringify({ completedBy: adminId })]
       );
 
-      return { orderId, orderNumber: order.order_number, ...fulfillResult };
+      return {
+        orderId,
+        orderNumber: order.order_number,
+        orderStatus: 'completed',
+        deliveryStatus: fulfillResult.pendingItems.length === 0 ? 'completed' : 'partial',
+        ...fulfillResult,
+      };
     } catch (err) {
       await conn.rollback();
       logger.error('OrderService.completeOrder:', err);
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  ADMIN: Cancel order — refund undelivered items to wallet
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async cancelOrder(orderId, adminId, reason = '') {
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [orderRows] = await conn.execute(
+        `SELECT o.*, u.full_name, u.email, u.user_id AS client_user_id,
+                w.wallet_id, w.balance AS walletBalance, w.currency
+           FROM orders o
+           JOIN users u   ON u.user_id = o.user_id
+           JOIN wallets w ON w.user_id = o.user_id
+          WHERE o.order_id = ?`,
+        [orderId]
+      );
+      if (!orderRows.length) throw new Error('Order not found');
+      const order = orderRows[0];
+      if (order.order_status === 'cancelled') throw new Error('Order is already cancelled');
+
+      const [detailRows] = await conn.execute(
+        `SELECT od.*, p.product_name FROM order_details od
+           JOIN products p ON p.product_id = od.product_id
+          WHERE od.order_id = ?`,
+        [orderId]
+      );
+
+      // Calculate refund for undelivered items
+      let refundAmount = 0;
+      const refundLines = [];
+      for (const row of detailRows) {
+        const undelivered = row.quantity - row.delivered_qty;
+        if (undelivered > 0) {
+          const lineRefund = parseFloat((undelivered * parseFloat(row.unit_price)).toFixed(2));
+          refundAmount   += lineRefund;
+          refundLines.push({ productName: row.product_name, qty: undelivered, unitPrice: parseFloat(row.unit_price), refund: lineRefund });
+        }
+      }
+      refundAmount = parseFloat(refundAmount.toFixed(2));
+
+      // Release any reserved codes
+      await conn.execute(
+        `UPDATE digital_codes SET status = 'available', order_id = NULL, reserved_at = NULL
+          WHERE order_id = ? AND status IN ('reserved', 'pending')`,
+        [orderId]
+      );
+
+      // Mark undelivered lines as failed
+      await conn.execute(
+        `UPDATE order_details SET delivery_status = 'failed'
+          WHERE order_id = ? AND delivery_status IN ('pending', 'partial')`,
+        [orderId]
+      );
+
+      // Mark order cancelled
+      await conn.execute(
+        `UPDATE orders SET order_status = 'cancelled', completed_at = NOW() WHERE order_id = ?`,
+        [orderId]
+      );
+
+      // Refund wallet
+      if (refundAmount > 0) {
+        const balanceBefore = parseFloat(order.walletBalance);
+        const balanceAfter  = parseFloat((balanceBefore + refundAmount).toFixed(2));
+        await conn.execute('UPDATE wallets SET balance = ? WHERE wallet_id = ?', [balanceAfter, order.wallet_id]);
+        await conn.execute(
+          `INSERT INTO wallet_transactions
+             (wallet_id, user_id, transaction_type, amount, currency,
+              balance_before, balance_after, description, reference_type, reference_id)
+           VALUES (?, ?, 'credit', ?, ?, ?, ?, ?, 'order', ?)`,
+          [order.wallet_id, order.client_user_id, refundAmount, order.currency,
+           balanceBefore, balanceAfter,
+           `Refund — cancelled Order ${order.order_number}${reason ? ': ' + reason : ''}`,
+           String(orderId)]
+        );
+      }
+
+      await conn.commit();
+
+      // Send cancellation email
+      await this._sendCancellationEmail(
+        { full_name: order.full_name, email: order.email },
+        order.order_number, orderId, refundAmount, refundLines, order.currency, reason
+      );
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_values)
+         VALUES (?, 'order_cancelled', 'order', ?, ?)`,
+        [adminId, String(orderId), JSON.stringify({ cancelledBy: adminId, reason, refundAmount })]
+      );
+
+      return { orderId, orderNumber: order.order_number, refundAmount, refundLines, currency: order.currency };
+    } catch (err) {
+      await conn.rollback();
+      logger.error('OrderService.cancelOrder:', err);
       throw err;
     } finally {
       conn.release();
@@ -445,7 +626,7 @@ class OrderService {
     }
 
     const whereClause = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
-    const offset = (page - 1) * limit;   // ← this was missing
+    const offset = (page - 1) * limit;
     const rows = await db.query(
       `SELECT
          o.order_id        AS id,
@@ -522,6 +703,12 @@ class OrderService {
       clientName: o.clientName,
       clientEmail: o.clientEmail,
       clientCompany: o.clientCompany,
+      client: {
+        full_name:    o.clientName,
+        email:        o.clientEmail,
+        company_name: o.clientCompany,
+      },
+      totalAmount: parseFloat(o.total_amount),
       items: rows.map(r => ({
         orderDetailId: r.order_detail_id,
         productId: r.product_id,
@@ -541,78 +728,163 @@ class OrderService {
   async _sendOrderEmail(user, orderNumber, orderId, fulfillResult, currency) {
     const { fulfilledItems, pendingItems, orderStatus } = fulfillResult;
 
-    const codesHtml = fulfilledItems.length
-      ? fulfilledItems.map(item => `
-          <div style="margin-bottom:16px;">
-            <strong>${item.productName}</strong>
-            (${item.delivered}/${item.quantity} delivered)<br/>
-            <div style="font-family:monospace;background:#f4f4f4;padding:8px;border-radius:4px;margin-top:6px;">
-              ${item.codes.map(c => `<div>${c}</div>`).join('')}
-            </div>
-          </div>`).join('')
-      : '<p>Codes will be sent once inventory is updated.</p>';
-
-    const pendingHtml = pendingItems.length
-      ? `<p style="color:#b45309;">⏳ The following items are pending fulfillment and will be sent once available:</p>
-         <ul>${pendingItems.map(i => `<li>${i.productName} — ${i.pending ?? i.quantity} remaining</li>`).join('')}</ul>`
-      : '';
-
     const statusLabel = orderStatus === 'completed'
       ? '✅ Fully Delivered'
       : orderStatus === 'processing'
         ? '⚡ Partially Delivered'
         : '⏳ Pending Fulfillment';
 
-    const html = `
-      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-        <h2 style="color:#1d4ed8;">Order Confirmation — ${orderNumber}</h2>
-        <p>Hi ${user.full_name},</p>
-        <p>Your order has been placed successfully. Status: <strong>${statusLabel}</strong></p>
-        ${fulfilledItems.length ? `<h3>Your Product Codes:</h3>${codesHtml}` : ''}
-        ${pendingHtml}
-        <p style="color:#6b7280;font-size:12px;margin-top:24px;">
-          Order ID: ${orderId} · CardCove B2B Portal
-        </p>
-      </div>`;
+    const pendingHtml = pendingItems.length
+      ? `<p style="color:#b45309;">⏳ The following items are pending fulfillment:</p>
+         <ul>${pendingItems.map(i => `<li>${i.productName} — ${i.pending ?? i.quantity} remaining</li>`).join('')}</ul>`
+      : '';
 
-    await emailService.sendEmail(
-      user.email,
-      `Order ${orderNumber} — ${statusLabel}`,
-      html,
-      `Order ${orderNumber} placed. ${fulfilledItems.length} products delivered. ${pendingItems.length} pending.`
-    );
+    // Build ZIP attachment if any codes were delivered
+    const attachments = [];
+    if (fulfilledItems.length > 0) {
+      const zipPassword = deriveZipPassword(user.email, orderNumber);
+      try {
+        const zipBuffer = await buildEncryptedCodesZip(orderNumber, fulfilledItems, zipPassword);
+        attachments.push({
+          filename:    `order_${orderNumber}_codes.zip`,
+          content:     zipBuffer,
+          contentType: 'application/zip',
+        });
+
+        const html = `
+          <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+            <h2 style="color:#1d4ed8;">Order Confirmation — ${orderNumber}</h2>
+            <p>Hi ${user.full_name},</p>
+            <p>Your order has been placed. Status: <strong>${statusLabel}</strong></p>
+            <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin:16px 0;">
+              <p style="margin:0 0 8px;font-weight:600;">📎 Your codes are attached as an encrypted ZIP file</p>
+              <p style="margin:0 0 4px;">
+                <strong>ZIP Password:</strong>
+                <code style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #d1d5db;font-size:16px;letter-spacing:2px;">${zipPassword}</code>
+              </p>
+              <p style="margin:8px 0 0;font-size:12px;color:#6b7280;">
+                This password is unique to this order. To re-derive it at any time:<br/>
+                SHA-256(<em>your_email</em>:<em>${orderNumber}</em>), first 12 hex characters.
+              </p>
+            </div>
+            ${pendingHtml}
+            <p style="color:#6b7280;font-size:12px;margin-top:24px;">Order ID: ${orderId} · CardCove B2B Portal</p>
+          </div>`;
+
+        await emailService.sendEmail(
+          user.email,
+          `Order ${orderNumber} — ${statusLabel}`,
+          html,
+          `Order ${orderNumber} placed. ${fulfilledItems.length} products delivered. ${pendingItems.length} pending. ZIP password: ${zipPassword}`,
+          attachments
+        );
+      } catch (zipErr) {
+        logger.error('ZIP build failed for order email:', zipErr);
+        // Fallback: send without attachment
+        await emailService.sendEmail(
+          user.email,
+          `Order ${orderNumber} — ${statusLabel}`,
+          `<p>Hi ${user.full_name}, your order ${orderNumber} has been placed. Codes could not be attached — please contact support.</p>`,
+          `Order ${orderNumber} placed.`
+        );
+      }
+    } else {
+      // No codes delivered yet — plain pending email, no attachment
+      const html = `
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <h2 style="color:#1d4ed8;">Order Confirmation — ${orderNumber}</h2>
+          <p>Hi ${user.full_name},</p>
+          <p>Your order has been placed. Status: <strong>${statusLabel}</strong></p>
+          ${pendingHtml}
+          <p style="color:#6b7280;font-size:12px;margin-top:24px;">Order ID: ${orderId} · CardCove B2B Portal</p>
+        </div>`;
+      await emailService.sendEmail(
+        user.email,
+        `Order ${orderNumber} — ${statusLabel}`,
+        html,
+        `Order ${orderNumber} placed. ${pendingItems.length} items pending fulfillment.`
+      );
+    }
   }
 
   // ─── Email: admin completes order ─────────────────────────────────────────
 
   async _sendCompletionEmail(user, orderNumber, orderId, fulfillResult, currency) {
-    const { fulfilledItems } = fulfillResult;
+    const { fulfilledItems, pendingItems } = fulfillResult;
     if (!fulfilledItems.length) return;
 
-    const codesHtml = fulfilledItems.map(item => `
-      <div style="margin-bottom:16px;">
-        <strong>${item.productName}</strong> (${item.delivered} codes)<br/>
-        <div style="font-family:monospace;background:#f4f4f4;padding:8px;border-radius:4px;margin-top:6px;">
-          ${item.codes.map(c => `<div>${c}</div>`).join('')}
-        </div>
-      </div>`).join('');
+    const zipPassword = deriveZipPassword(user.email, orderNumber);
+    const pendingNote = pendingItems.length
+      ? `<p style="color:#b45309;">⏳ ${pendingItems.length} item(s) are still pending — contact support to cancel those items for a refund.</p>`
+      : '';
+
+    const attachments = [];
+    try {
+      const zipBuffer = await buildEncryptedCodesZip(orderNumber, fulfilledItems, zipPassword);
+      attachments.push({
+        filename:    `order_${orderNumber}_additional_codes.zip`,
+        content:     zipBuffer,
+        contentType: 'application/zip',
+      });
+    } catch (zipErr) {
+      logger.error('ZIP build failed for completion email:', zipErr);
+    }
 
     const html = `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-        <h2 style="color:#16a34a;">Order ${orderNumber} — Remaining Codes Delivered</h2>
+        <h2 style="color:#16a34a;">Order ${orderNumber} — Additional Codes Delivered</h2>
         <p>Hi ${user.full_name},</p>
-        <p>The remaining products from your order have been fulfilled:</p>
-        ${codesHtml}
-        <p style="color:#6b7280;font-size:12px;margin-top:24px;">
-          Order ID: ${orderId} · CardCove B2B Portal
-        </p>
+        <p>More codes from your order are now available.</p>
+        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin:16px 0;">
+          <p style="margin:0 0 8px;font-weight:600;">📎 Additional codes attached as encrypted ZIP</p>
+          <p style="margin:0 0 4px;">
+            <strong>ZIP Password:</strong>
+            <code style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #d1d5db;font-size:16px;letter-spacing:2px;">${zipPassword}</code>
+          </p>
+          <p style="margin:8px 0 0;font-size:12px;color:#6b7280;">Same password as your original order confirmation email.</p>
+        </div>
+        ${pendingNote}
+        <p style="color:#6b7280;font-size:12px;margin-top:24px;">Order ID: ${orderId} · CardCove B2B Portal</p>
       </div>`;
 
     await emailService.sendEmail(
       user.email,
-      `Order ${orderNumber} — Remaining Codes`,
+      `Order ${orderNumber} — Additional Codes Delivered`,
       html,
-      `Remaining codes for order ${orderNumber} have been delivered.`
+      `Additional codes for order ${orderNumber} have been delivered. ZIP password: ${zipPassword}`,
+      attachments
+    );
+  }
+
+  // ─── Email: order cancelled ───────────────────────────────────────────────
+
+  async _sendCancellationEmail(user, orderNumber, orderId, refundAmount, refundLines, currency, reason) {
+    const refundHtml = refundAmount > 0
+      ? `<div style="background:#dcfce7;border:1px solid #16a34a;border-radius:6px;padding:16px;margin-top:16px;">
+           <strong>Refund: ${currency} ${refundAmount.toFixed(2)} has been credited to your wallet</strong>
+           <ul style="margin:8px 0 0;">
+             ${refundLines.map(l => `<li>${l.productName} × ${l.qty} — ${currency} ${l.refund.toFixed(2)}</li>`).join('')}
+           </ul>
+         </div>`
+      : '<p>No undelivered items — no refund was issued.</p>';
+
+    const reasonNote = reason ? `<p><strong>Reason:</strong> ${reason}</p>` : '';
+
+    const html = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+        <h2 style="color:#dc2626;">Order ${orderNumber} — Cancelled</h2>
+        <p>Hi ${user.full_name},</p>
+        <p>Your order has been cancelled.</p>
+        ${reasonNote}
+        ${refundHtml}
+        <p style="color:#6b7280;font-size:12px;margin-top:24px;">Order ID: ${orderId} · CardCove B2B Portal</p>
+      </div>`;
+
+    await emailService.sendEmail(
+      user.email,
+      `Order ${orderNumber} — Cancelled${refundAmount > 0 ? ` (Refund: ${currency} ${refundAmount.toFixed(2)})` : ''}`,
+      html,
+      `Order ${orderNumber} cancelled. Refund: ${currency} ${refundAmount.toFixed(2)}.`
     );
   }
 }

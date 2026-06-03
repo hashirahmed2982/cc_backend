@@ -176,9 +176,10 @@ class UserController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, company, phone, role } = req.body;
+      const { name, company, phone, role, email } = req.body;
 
       const user = await userService.findById(parseInt(id));
+
 
       if (!user) {
         return res.status(404).json({
@@ -186,13 +187,23 @@ class UserController {
           message: 'User not found'
         });
       }
+      if (email && email.trim() !== user.email) {
+        const existingUser = await userService.findByEmail(email);
+        if (existingUser) {
+          return res.status(400).json({
+            success: false,
+            message: 'User with this email already exists'
+          });
+        }
+      }
 
       // Save old values for audit
       const oldValues = {
         full_name: user.full_name,
         company_name: user.company_name,
         phone: user.phone,
-        role_id: user.role_id
+        role_id: user.role_id,
+        email: user.email
       };
 
       const updates = {};
@@ -200,6 +211,7 @@ class UserController {
       if (company) updates.company_name = company;
       if (phone) updates.phone = phone;
       if (role) updates.role_id = role;
+      if (email) updates.email = email;
       updates.updated_by = req.user.user_id;
 
       await userService.update(parseInt(id), updates);
