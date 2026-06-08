@@ -181,7 +181,7 @@ class AuthController {
   async requestOTP(req, res, next) {
     try {
       const { email } = req.body;
-      
+
       // Optionally check if user exists
       const user = await userService.findByEmail(email);
       if (!user) {
@@ -236,7 +236,7 @@ class AuthController {
 
       // Find user
       const user = await userService.findByEmail(email);
-      
+
       if (!user) {
         return res.status(401).json({
           success: false,
@@ -297,7 +297,7 @@ class AuthController {
 
       // Verify password
       const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-      
+
       if (!isPasswordValid) {
         // Increment failed attempts
         const failedAttempts = (user.failed_login_attempts || 0) + 1;
@@ -414,7 +414,7 @@ class AuthController {
         result: 'failed',
         error_message: error.message
       });
-      
+
       next(error);
     }
   }
@@ -467,6 +467,24 @@ class AuthController {
         return res.status(401).json({
           success: false,
           message: 'Session not found or expired'
+        });
+      }
+      // Add this temporary log at the top of refreshToken:
+      console.log('SESSION_TIMEOUT env:', process.env.SESSION_TIMEOUT);
+      console.log('sessionTimeout value:', parseInt(process.env.SESSION_TIMEOUT) || 900000);
+      console.log('session.last_activity raw:', session.last_activity);
+      console.log('lastActivity parsed:', new Date(session.last_activity));
+      console.log('now:', new Date());
+      console.log('diff ms:', new Date() - new Date(session.last_activity));
+      // ── CHECK IDLE TIMEOUT ── same logic as protect middleware ───────────────
+      const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT) || 900000; // 15 min
+      const isIdle = await sessionService.isIdle(session.session_id, sessionTimeout);
+      if (isIdle) {
+        await sessionService.delete(session.session_id);
+        return res.status(401).json({
+          success: false,
+          message: 'Session timed out due to inactivity. Please log in again.',
+          code: 'SESSION_TIMEOUT',
         });
       }
 
@@ -534,7 +552,7 @@ class AuthController {
     try {
       const { email } = req.body;
       const user = await userService.findByEmail(email);
-      
+
       if (!user) {
         // Don't reveal if user exists
         return res.json({
@@ -578,13 +596,13 @@ class AuthController {
     try {
       const { token, newPassword } = req.body;
       const tokenData = await authService.verifyPasswordResetToken(token);
-      
+
       if (!tokenData) {
         return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
       }
 
       const passwordHash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
-      
+
       await userService.update(tokenData.user_id, { password_hash: passwordHash });
       await sessionService.deleteAllByUserId(tokenData.user_id);
       await authService.deletePasswordResetToken(token);

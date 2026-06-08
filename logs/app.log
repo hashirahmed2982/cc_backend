@@ -878,3 +878,79 @@
 {"level":"info","message":"Email sent: <7bf64197-8330-20a1-fe26-75183ff3cebc@cardcovefzc.com>","timestamp":"2026-06-08 07:16:40"}
 {"level":"info","message":"Attempting to verify OTP: 491048 for email: powerfulm1ha@gmail.com","timestamp":"2026-06-08 07:19:24"}
 {"level":"warn","message":"❌ OTP Verification failed for powerfulm1ha@gmail.com. OTP ID 67 has expired. Expires at: Mon Jun 08 2026 07:18:37 GMT+0500 (Pakistan Standard Time)","timestamp":"2026-06-08 07:19:25"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 07:20:03"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 07:20:03"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 07:20:03"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 07:20:03"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 07:20:03"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 07:20:06"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 22:24:52"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 22:24:52"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 22:24:52"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 22:24:52"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 22:24:52"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 22:24:54"}
+{"level":"info","message":"Email sent: <ce3417d8-585f-9edc-5a60-a00888989768@cardcovefzc.com>","timestamp":"2026-06-08 22:30:25"}
+{"level":"info","message":"Email sent: <913dd869-c890-72d7-f08a-436f1e236fd2@cardcovefzc.com>","timestamp":"2026-06-08 22:30:25"}
+{"level":"info","message":"Attempting to verify OTP: 538991 for email: hashira690@gmail.com","timestamp":"2026-06-08 22:30:37"}
+{"level":"info","message":"✅ OTP Verified successfully for hashira690@gmail.com. OTP ID: 69","timestamp":"2026-06-08 22:30:37"}
+{"level":"info","message":"Email sent: <14fe61df-23ad-c626-68d8-5cabc88fe328@cardcovefzc.com>","timestamp":"2026-06-08 22:31:05"}
+{"level":"info","message":"Attempting to verify OTP: 917011 for email: powerfulm1ha@gmail.com","timestamp":"2026-06-08 22:31:14"}
+{"level":"info","message":"✅ OTP Verified successfully for powerfulm1ha@gmail.com. OTP ID: 70","timestamp":"2026-06-08 22:31:14"}
+{"level":"info","message":"Email sent: <ef391ee9-f5c6-4dde-4f1b-5c6efebb49ed@cardcovefzc.com>","timestamp":"2026-06-08 22:31:18"}
+{"level":"info","message":"Email sent: <78e7b032-413d-5d04-452d-baa461e6f761@cardcovefzc.com>","timestamp":"2026-06-08 22:31:22"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 22:43:02"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 22:43:02"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 22:43:02"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 22:43:02"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 22:43:02"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 22:43:04"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 23:29:47"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 23:29:47"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 23:29:47"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 23:29:47"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 23:29:47"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 23:29:50"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 23:53:39"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 23:53:39"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 23:53:39"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 23:53:39"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 23:53:39"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 23:53:42"}
+{"level":"info","message":"SIGINT signal received: closing HTTP server","timestamp":"2026-06-08 23:55:25"}
+{"level":"info","message":"HTTP server closed","timestamp":"2026-06-08 23:55:25"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 23:55:35"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 23:55:35"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 23:55:35"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 23:55:35"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 23:55:35"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 23:55:38"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-09 00:18:10"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-09 00:18:10"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-09 00:18:10"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-09 00:18:10"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-09 00:18:10"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-09 00:18:12"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-09 00:18:39"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-09 00:18:39"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-09 00:18:39"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-09 00:18:39"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-09 00:18:39"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-09 00:18:42"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-09 00:20:49"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-09 00:20:49"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-09 00:20:49"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-09 00:20:49"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-09 00:20:49"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-09 00:20:51"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-09 00:21:11"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-09 00:21:11"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-09 00:21:11"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-09 00:21:11"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-09 00:21:11"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-09 00:21:14"}
+{"ip":"127.0.0.1","level":"error","message":"Your token has expired. Please log in again.","method":"GET","path":"/api/v1/wallet/topup-requests","stack":"Error: Your token has expired. Please log in again.\n    at protect (D:\\cc_backend\\src\\middleware\\auth.js:28:21)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)\n    at D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:286:9\n    at Function.process_params (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:346:12)\n    at next (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:280:10)\n    at Function.handle (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:175:3)\n    at router (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:47:12)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)","statusCode":401,"timestamp":"2026-06-09 00:40:13"}
+{"ip":"127.0.0.1","level":"error","message":"Your token has expired. Please log in again.","method":"GET","path":"/api/v1/wallet/balances","stack":"Error: Your token has expired. Please log in again.\n    at protect (D:\\cc_backend\\src\\middleware\\auth.js:28:21)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)\n    at D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:286:9\n    at Function.process_params (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:346:12)\n    at next (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:280:10)\n    at Function.handle (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:175:3)\n    at router (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:47:12)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)","statusCode":401,"timestamp":"2026-06-09 00:40:13"}
+{"ip":"127.0.0.1","level":"error","message":"Your token has expired. Please log in again.","method":"GET","path":"/api/v1/wallet/transactions/all","stack":"Error: Your token has expired. Please log in again.\n    at protect (D:\\cc_backend\\src\\middleware\\auth.js:28:21)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)\n    at D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:286:9\n    at Function.process_params (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:346:12)\n    at next (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:280:10)\n    at Function.handle (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:175:3)\n    at router (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:47:12)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)","statusCode":401,"timestamp":"2026-06-09 00:40:13"}
+{"ip":"127.0.0.1","level":"error","message":"Your token has expired. Please log in again.","method":"GET","path":"/api/v1/wallet/topup-requests","stack":"Error: Your token has expired. Please log in again.\n    at protect (D:\\cc_backend\\src\\middleware\\auth.js:28:21)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)\n    at D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:286:9\n    at Function.process_params (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:346:12)\n    at next (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:280:10)\n    at Function.handle (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:175:3)\n    at router (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:47:12)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)","statusCode":401,"timestamp":"2026-06-09 00:40:13"}
+{"ip":"127.0.0.1","level":"error","message":"Your token has expired. Please log in again.","method":"GET","path":"/api/v1/wallet/balances","stack":"Error: Your token has expired. Please log in again.\n    at protect (D:\\cc_backend\\src\\middleware\\auth.js:28:21)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)\n    at D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:286:9\n    at Function.process_params (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:346:12)\n    at next (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:280:10)\n    at Function.handle (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:175:3)\n    at router (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:47:12)\n    at Layer.handle [as handle_request] (D:\\cc_backend\\node_modules\\express\\lib\\router\\layer.js:95:5)\n    at trim_prefix (D:\\cc_backend\\node_modules\\express\\lib\\router\\index.js:328:13)","statusCode":401,"timestamp":"2026-06-09 00:40:13"}

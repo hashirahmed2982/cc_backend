@@ -44,10 +44,8 @@ const protect = async (req, res, next) => {
 
     // 5) Check session timeout (15 minutes inactivity)
     const sessionTimeout = parseInt(process.env.SESSION_TIMEOUT) || 900000; // 15 minutes default
-    const lastActivity = new Date(session.last_activity);
-    const now = new Date();
-
-    if (now - lastActivity > sessionTimeout) {
+    const isIdle = await sessionService.isIdle(session.session_id, sessionTimeout);
+    if (isIdle) {
       await sessionService.delete(session.session_id);
       return next(new AppError('Session timed out due to inactivity. Please log in again.', 401));
     }

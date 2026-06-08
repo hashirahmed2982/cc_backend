@@ -5,6 +5,18 @@ class SessionService {
   /**
    * Create new session
    */
+
+  async isIdle(sessionId, timeoutMs) {
+    const timeoutSeconds = Math.floor(timeoutMs / 1000);
+    const row = await db.queryOne(
+      `SELECT TIMESTAMPDIFF(SECOND, last_activity, NOW()) AS idle_seconds
+       FROM sessions WHERE session_id = ?`,
+      [sessionId]
+    );
+    if (!row) return true;
+    return row.idle_seconds > timeoutSeconds;
+  }
+  
   async create(sessionData) {
     try {
       const sql = `
@@ -14,7 +26,7 @@ class SessionService {
         )
         VALUES (?, ?, ?, ?, ?, ?, NOW())
       `;
-      
+
       const params = [
         sessionData.user_id,
         sessionData.token,
@@ -64,7 +76,7 @@ class SessionService {
   async update(sessionId, updates) {
     try {
       const allowedFields = ['token', 'refresh_token', 'last_activity', 'expires_at'];
-      
+
       const updateFields = [];
       const values = [];
 
@@ -153,11 +165,11 @@ class SessionService {
     try {
       const sql = 'DELETE FROM sessions WHERE expires_at < NOW()';
       const result = await db.query(sql);
-      
+
       if (result.affectedRows > 0) {
         logger.info(`Cleaned up ${result.affectedRows} expired sessions`);
       }
-      
+
       return result.affectedRows;
     } catch (error) {
       logger.error('Error cleaning up expired sessions:', error);

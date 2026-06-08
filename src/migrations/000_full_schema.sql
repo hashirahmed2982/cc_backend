@@ -560,9 +560,13 @@ CREATE TABLE IF NOT EXISTS topup_requests (
 -- ALTER TABLE digital_codes
 --   ADD UNIQUE KEY uq_sku_code_hash (sku_id, code_hash);
 
-ALTER TABLE users
-  ADD COLUMN zip_password VARCHAR(255) NULL
-  AFTER password_hash;
+-- ALTER TABLE users
+--   ADD COLUMN zip_password VARCHAR(255) NULL
+--   AFTER password_hash;
+
+  -- Fix existing sessions to UTC (subtract your offset, e.g. -5 hours for UTC+5)
+UPDATE sessions SET last_activity = CONVERT_TZ(last_activity, '+05:00', '+00:00');
+UPDATE sessions SET expires_at    = CONVERT_TZ(expires_at,    '+05:00', '+00:00');
 
 -- ============================================
 -- INITIAL DATA
