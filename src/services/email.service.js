@@ -73,7 +73,7 @@ class EmailService {
     const html = `<div style="font-family: sans-serif; border: 1px solid #ddd; padding: 20px; border-radius: 10px;">
       <h2>Verification Code</h2>
       <p>Your code is: <b style="font-size: 24px;">${otp}</b></p>
-      <p>Valid for 10 minutes.</p>
+      <p>Valid for 2 minutes.</p>
     </div>`;
     return this.sendEmail(email, `${otp} is your verification code`, html, `Your code is ${otp}`);
   }

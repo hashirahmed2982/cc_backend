@@ -109,6 +109,13 @@ class UserController {
           message: 'Invalid user_type. Must be admin or b2b_client.'
         });
       }
+      const { zip_password } = req.body;
+      if (targetType === 'b2b_client' && !zip_password?.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'ZIP password is required for B2B client accounts.'
+        });
+      }
 
       // Map user_type to role_id
       const roleMap = { admin: 2, b2b_client: 3 };
@@ -140,6 +147,7 @@ class UserController {
         status: 'active',
         email_verified: true,
         must_change_password: true,
+        zip_password: targetType === 'b2b_client' ? (zip_password?.trim() || null) : null,
         created_by: requestingUser.user_id
       });
 
@@ -154,7 +162,7 @@ class UserController {
         action: 'user_creation',
         entity_type: 'user',
         entity_id: userId,
-        new_values: { email, name, company, user_type: targetType },
+        new_values: { email, name, company, user_type: targetType, zip_password: targetType === 'b2b_client' ? (zip_password?.trim() || null) : null },
         ip_address: req.ip,
         user_agent: req.get('user-agent')
       });
@@ -176,7 +184,7 @@ class UserController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, company, phone, role, email } = req.body;
+      const { name, company, phone, role, email, zip_password } = req.body;
 
       const user = await userService.findById(parseInt(id));
 
@@ -212,6 +220,9 @@ class UserController {
       if (phone) updates.phone = phone;
       if (role) updates.role_id = role;
       if (email) updates.email = email;
+      if (zip_password !== undefined) {
+        updates.zip_password = zip_password?.trim() || null;
+      }
       updates.updated_by = req.user.user_id;
 
       await userService.update(parseInt(id), updates);

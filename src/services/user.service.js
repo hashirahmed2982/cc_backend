@@ -69,16 +69,17 @@ class UserService {
     try {
       const sql = `
         INSERT INTO users (
-          email, password_hash, full_name, company_name,
+          email, password_hash, zip_password, full_name, company_name,
           role_id, user_type, status, phone,
           is_2fa_enabled, must_change_password, created_by
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
 
       const params = [
         userData.email,
         userData.password_hash,
+        userData.zip_password || null,
         userData.full_name,
         userData.company_name || null,
         userData.role_id || 3,
@@ -109,7 +110,7 @@ class UserService {
         'locked_until', 'last_login', 'email_verified', 'password_hash',
         'must_change_password', 'updated_by', 'permanent_block_reason',
         'permanent_block_date', 'wallet_settled', 'settlement_method',
-        'settlement_reference', 'settlement_date', 'settlement_notes'
+        'settlement_reference', 'settlement_date', 'settlement_notes' , 'zip_password'
       ];
 
       const updateFields = [];

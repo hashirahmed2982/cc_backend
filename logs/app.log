@@ -826,3 +826,55 @@
 {"level":"info","message":"✓ Environment: development","timestamp":"2026-06-04 04:05:39"}
 {"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-04 04:05:39"}
 {"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-04 04:05:41"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-04 04:16:42"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-04 04:16:42"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-04 04:16:42"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-04 04:16:42"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-04 04:16:42"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-04 04:16:44"}
+{"level":"info","message":"Email sent: <79bb8cd8-3130-ea18-99b7-403ca606cdf5@cardcovefzc.com>","timestamp":"2026-06-04 04:18:07"}
+{"level":"info","message":"Attempting to verify OTP: 542276 for email: powerfulm1ha@gmail.com","timestamp":"2026-06-04 04:18:18"}
+{"level":"info","message":"✅ OTP Verified successfully for powerfulm1ha@gmail.com. OTP ID: 62","timestamp":"2026-06-04 04:18:18"}
+{"level":"info","message":"Email sent: <fb2d93fd-2ad6-e091-81a4-c35fd16abab8@cardcovefzc.com>","timestamp":"2026-06-04 04:18:21"}
+{"level":"info","message":"Email sent: <9ee76f0f-6bfe-d6cb-2a1c-74cbfb8c151c@cardcovefzc.com>","timestamp":"2026-06-04 04:18:24"}
+{"level":"info","message":"Email sent: <caac76a5-2f87-65a0-a0b6-b1230905db08@cardcovefzc.com>","timestamp":"2026-06-04 04:20:11"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 06:16:52"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 06:16:52"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 06:16:52"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 06:16:52"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 06:16:52"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 06:16:55"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 06:53:55"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 06:53:55"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 06:53:55"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 06:53:55"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 06:53:55"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 06:53:57"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 07:03:24"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 07:03:24"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 07:03:24"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 07:03:24"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 07:03:24"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 07:03:27"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 07:03:41"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 07:03:41"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 07:03:41"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 07:03:41"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 07:03:41"}
+{"level":"info","message":"Database connection pool created successfully","timestamp":"2026-06-08 07:03:45"}
+{"level":"info","message":"✓ Database connected successfully","timestamp":"2026-06-08 07:03:45"}
+{"level":"info","message":"✓ Server running on http://0.0.0.0:5000","timestamp":"2026-06-08 07:03:45"}
+{"level":"info","message":"✓ Environment: development","timestamp":"2026-06-08 07:03:45"}
+{"level":"info","message":"✓ API Version: v1","timestamp":"2026-06-08 07:03:45"}
+{"level":"info","message":"✅ Email service verified and ready","timestamp":"2026-06-08 07:03:47"}
+{"level":"info","message":"Email sent: <d432701c-12a4-25de-725e-985d79e1a215@cardcovefzc.com>","timestamp":"2026-06-08 07:08:23"}
+{"level":"info","message":"Email sent: <17c2fcf6-5b19-85a8-74bc-c5bee9fbf0a3@cardcovefzc.com>","timestamp":"2026-06-08 07:08:23"}
+{"level":"info","message":"Attempting to verify OTP: 227208 for email: hashira690@gmail.com","timestamp":"2026-06-08 07:08:49"}
+{"level":"info","message":"✅ OTP Verified successfully for hashira690@gmail.com. OTP ID: 64","timestamp":"2026-06-08 07:08:49"}
+{"level":"info","message":"Email sent: <35153f93-8859-68c1-b373-58b3ca1c1e9a@cardcovefzc.com>","timestamp":"2026-06-08 07:10:19"}
+{"level":"info","message":"Email sent: <bfca227f-3a0e-94a1-fe99-a9e356f27289@cardcovefzc.com>","timestamp":"2026-06-08 07:10:19"}
+{"level":"info","message":"Attempting to verify OTP: 231733 for email: hashira690@gmail.com","timestamp":"2026-06-08 07:11:01"}
+{"level":"info","message":"✅ OTP Verified successfully for hashira690@gmail.com. OTP ID: 66","timestamp":"2026-06-08 07:11:01"}
+{"level":"info","message":"Email sent: <7bf64197-8330-20a1-fe26-75183ff3cebc@cardcovefzc.com>","timestamp":"2026-06-08 07:16:40"}
+{"level":"info","message":"Attempting to verify OTP: 491048 for email: powerfulm1ha@gmail.com","timestamp":"2026-06-08 07:19:24"}
+{"level":"warn","message":"❌ OTP Verification failed for powerfulm1ha@gmail.com. OTP ID 67 has expired. Expires at: Mon Jun 08 2026 07:18:37 GMT+0500 (Pakistan Standard Time)","timestamp":"2026-06-08 07:19:25"}

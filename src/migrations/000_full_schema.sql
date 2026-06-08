@@ -549,16 +549,20 @@ CREATE TABLE IF NOT EXISTS topup_requests (
 -- ALTER TABLE digital_codes
 --   ADD UNIQUE KEY uq_sku_code (sku_id, code(255));
 
+-- ALTER TABLE users
+--   ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER `2fa_secret`;
+-- ALTER TABLE digital_codes
+--   ADD COLUMN code_hash VARCHAR(64) NULL AFTER code;
+
+-- ALTER TABLE digital_codes
+--   DROP INDEX uq_sku_code;
+
+-- ALTER TABLE digital_codes
+--   ADD UNIQUE KEY uq_sku_code_hash (sku_id, code_hash);
+
 ALTER TABLE users
-  ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER `2fa_secret`;
-ALTER TABLE digital_codes
-  ADD COLUMN code_hash VARCHAR(64) NULL AFTER code;
-
-ALTER TABLE digital_codes
-  DROP INDEX uq_sku_code;
-
-ALTER TABLE digital_codes
-  ADD UNIQUE KEY uq_sku_code_hash (sku_id, code_hash);
+  ADD COLUMN zip_password VARCHAR(255) NULL
+  AFTER password_hash;
 
 -- ============================================
 -- INITIAL DATA

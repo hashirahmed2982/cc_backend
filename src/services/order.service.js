@@ -37,12 +37,12 @@ function generateOrderNumber() {
 // ─── Derive ZIP password from email + orderNumber ─────────────────────────────
 // password = first 12 hex chars of SHA-256("email:orderNumber")
 // Deterministic — client can always re-derive from their own email + order number
-function deriveZipPassword(email, orderNumber) {
-  return crypto
-    .createHash('sha256')
-    .update(`${email.toLowerCase().trim()}:${orderNumber}`)
-    .digest('hex')
-    .slice(0, 12);
+async function getZipPassword(userId) {
+  const row = await db.queryOne(
+    'SELECT zip_password FROM users WHERE user_id = ?', [userId]
+  );
+  // zip_password is stored as plain text (set by admin at user creation)
+  return row?.zip_password || null;
 }
 
 // ─── Build AES-256 encrypted ZIP buffer ──────────────────────────────────────
@@ -51,14 +51,14 @@ function buildEncryptedCodesZip(orderNumber, fulfilledItems, password) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     const output = new stream.PassThrough();
-    output.on('data',  c  => chunks.push(c));
-    output.on('end',   () => resolve(Buffer.concat(chunks)));
+    output.on('data', c => chunks.push(c));
+    output.on('end', () => resolve(Buffer.concat(chunks)));
     output.on('error', reject);
 
     const archive = ZipEncrypted({
       encryptionMethod: 'aes256',
-      password:         Buffer.from(String(password), 'utf-8'),
-      zlib:             { level: 9 },
+      password: Buffer.from(String(password), 'utf-8'),
+      zlib: { level: 9 },
     });
     archive.on('error', reject);
     archive.pipe(output);
@@ -209,8 +209,9 @@ class OrderService {
         'SELECT full_name, email FROM users WHERE user_id = ?', [userId]
       );
       const user = userRows[0];
-
-      await this._sendOrderEmail(user, orderNumber, orderId, fulfillResult, wallet.currency);
+      const zipPassword = await getZipPassword(userId);
+      await this._sendOrderEmail(user, orderNumber, orderId, fulfillResult, wallet.currency, zipPassword);
+      // await this._sendOrderEmail(user, orderNumber, orderId, fulfillResult, wallet.currency);
 
       return {
         orderId,
@@ -411,7 +412,8 @@ class OrderService {
       // Send email with remaining codes (only if new codes were delivered)
       if (fulfillResult.fulfilledItems.length > 0) {
         const user = { full_name: order.full_name, email: order.email };
-        await this._sendCompletionEmail(user, order.order_number, orderId, fulfillResult, order.currency);
+        const zipPassword = await getZipPassword(order.client_user_id);
+        await this._sendCompletionEmail(user, order.order_number, orderId, fulfillResult, order.currency, zipPassword);
       }
 
       // Audit
@@ -473,7 +475,7 @@ class OrderService {
         const undelivered = row.quantity - row.delivered_qty;
         if (undelivered > 0) {
           const lineRefund = parseFloat((undelivered * parseFloat(row.unit_price)).toFixed(2));
-          refundAmount   += lineRefund;
+          refundAmount += lineRefund;
           refundLines.push({ productName: row.product_name, qty: undelivered, unitPrice: parseFloat(row.unit_price), refund: lineRefund });
         }
       }
@@ -502,7 +504,7 @@ class OrderService {
       // Refund wallet
       if (refundAmount > 0) {
         const balanceBefore = parseFloat(order.walletBalance);
-        const balanceAfter  = parseFloat((balanceBefore + refundAmount).toFixed(2));
+        const balanceAfter = parseFloat((balanceBefore + refundAmount).toFixed(2));
         await conn.execute('UPDATE wallets SET balance = ? WHERE wallet_id = ?', [balanceAfter, order.wallet_id]);
         await conn.execute(
           `INSERT INTO wallet_transactions
@@ -510,9 +512,9 @@ class OrderService {
               balance_before, balance_after, description, reference_type, reference_id)
            VALUES (?, ?, 'credit', ?, ?, ?, ?, ?, 'order', ?)`,
           [order.wallet_id, order.client_user_id, refundAmount, order.currency,
-           balanceBefore, balanceAfter,
-           `Refund — cancelled Order ${order.order_number}${reason ? ': ' + reason : ''}`,
-           String(orderId)]
+            balanceBefore, balanceAfter,
+          `Refund — cancelled Order ${order.order_number}${reason ? ': ' + reason : ''}`,
+          String(orderId)]
         );
       }
 
@@ -704,8 +706,8 @@ class OrderService {
       clientEmail: o.clientEmail,
       clientCompany: o.clientCompany,
       client: {
-        full_name:    o.clientName,
-        email:        o.clientEmail,
+        full_name: o.clientName,
+        email: o.clientEmail,
         company_name: o.clientCompany,
       },
       totalAmount: parseFloat(o.total_amount),
@@ -725,7 +727,7 @@ class OrderService {
 
   // ─── Email: order placed ──────────────────────────────────────────────────
 
-  async _sendOrderEmail(user, orderNumber, orderId, fulfillResult, currency) {
+  async _sendOrderEmail(user, orderNumber, orderId, fulfillResult, currency, zipPassword) {
     const { fulfilledItems, pendingItems, orderStatus } = fulfillResult;
 
     const statusLabel = orderStatus === 'completed'
@@ -742,12 +744,12 @@ class OrderService {
     // Build ZIP attachment if any codes were delivered
     const attachments = [];
     if (fulfilledItems.length > 0) {
-      const zipPassword = deriveZipPassword(user.email, orderNumber);
+      // const zipPassword = deriveZipPassword(user.email, orderNumber);
       try {
         const zipBuffer = await buildEncryptedCodesZip(orderNumber, fulfilledItems, zipPassword);
         attachments.push({
-          filename:    `order_${orderNumber}_codes.zip`,
-          content:     zipBuffer,
+          filename: `order_${orderNumber}_codes.zip`,
+          content: zipBuffer,
           contentType: 'application/zip',
         });
 
@@ -758,10 +760,6 @@ class OrderService {
             <p>Your order has been placed. Status: <strong>${statusLabel}</strong></p>
             <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin:16px 0;">
               <p style="margin:0 0 8px;font-weight:600;">📎 Your codes are attached as an encrypted ZIP file</p>
-              <p style="margin:0 0 4px;">
-                <strong>ZIP Password:</strong>
-                <code style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #d1d5db;font-size:16px;letter-spacing:2px;">${zipPassword}</code>
-              </p>
               <p style="margin:8px 0 0;font-size:12px;color:#6b7280;">
                 This password is unique to this order. To re-derive it at any time:<br/>
                 SHA-256(<em>your_email</em>:<em>${orderNumber}</em>), first 12 hex characters.
@@ -809,11 +807,10 @@ class OrderService {
 
   // ─── Email: admin completes order ─────────────────────────────────────────
 
-  async _sendCompletionEmail(user, orderNumber, orderId, fulfillResult, currency) {
+  async _sendCompletionEmail(user, orderNumber, orderId, fulfillResult, currency , zipPassword) {
     const { fulfilledItems, pendingItems } = fulfillResult;
     if (!fulfilledItems.length) return;
 
-    const zipPassword = deriveZipPassword(user.email, orderNumber);
     const pendingNote = pendingItems.length
       ? `<p style="color:#b45309;">⏳ ${pendingItems.length} item(s) are still pending — contact support to cancel those items for a refund.</p>`
       : '';
@@ -822,8 +819,8 @@ class OrderService {
     try {
       const zipBuffer = await buildEncryptedCodesZip(orderNumber, fulfilledItems, zipPassword);
       attachments.push({
-        filename:    `order_${orderNumber}_additional_codes.zip`,
-        content:     zipBuffer,
+        filename: `order_${orderNumber}_additional_codes.zip`,
+        content: zipBuffer,
         contentType: 'application/zip',
       });
     } catch (zipErr) {
@@ -837,11 +834,6 @@ class OrderService {
         <p>More codes from your order are now available.</p>
         <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin:16px 0;">
           <p style="margin:0 0 8px;font-weight:600;">📎 Additional codes attached as encrypted ZIP</p>
-          <p style="margin:0 0 4px;">
-            <strong>ZIP Password:</strong>
-            <code style="background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #d1d5db;font-size:16px;letter-spacing:2px;">${zipPassword}</code>
-          </p>
-          <p style="margin:8px 0 0;font-size:12px;color:#6b7280;">Same password as your original order confirmation email.</p>
         </div>
         ${pendingNote}
         <p style="color:#6b7280;font-size:12px;margin-top:24px;">Order ID: ${orderId} · CardCove B2B Portal</p>
