@@ -7,6 +7,8 @@ const crypto = require('crypto');
 const ZipEncrypted = require('archiver-zip-encrypted');
 const stream = require('stream');
 const emailService = require('./email.service');
+const auditService = require('../services/audit.service');
+
 
 // ─── Decrypt codes (same key as product_service) ─────────────────────────────
 const RAW_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-this!!';
@@ -807,7 +809,7 @@ class OrderService {
 
   // ─── Email: admin completes order ─────────────────────────────────────────
 
-  async _sendCompletionEmail(user, orderNumber, orderId, fulfillResult, currency , zipPassword) {
+  async _sendCompletionEmail(user, orderNumber, orderId, fulfillResult, currency, zipPassword) {
     const { fulfilledItems, pendingItems } = fulfillResult;
     if (!fulfilledItems.length) return;
 
@@ -847,7 +849,88 @@ class OrderService {
       attachments
     );
   }
+  async getDeliveredCodes(orderId) {
+    const rows = await db.query(
+      `SELECT
+       dc.code_id,
+       dc.code,
+       dc.status,
+       dc.sold_at,
+       p.product_name,
+       ps.face_value,
+       ps.selling_price
+     FROM digital_codes dc
+     JOIN order_details od ON od.order_id = ? AND od.sku_id = dc.sku_id
+     JOIN product_skus ps  ON ps.sku_id   = dc.sku_id
+     JOIN products p       ON p.product_id = ps.product_id
+     WHERE dc.order_id = ? AND dc.status = 'sold'
+     ORDER BY p.product_name, dc.sold_at`,
+      [orderId, orderId]
+    );
 
+    // Decrypt codes and group by product
+    const grouped = {};
+    for (const row of rows) {
+      const name = row.product_name;
+      if (!grouped[name]) {
+        grouped[name] = {
+          productName: name,
+          faceValue: parseFloat(row.face_value || 0),
+          unitPrice: parseFloat(row.selling_price || 0),
+          codes: [],
+        };
+      }
+      grouped[name].codes.push({
+        codeId: row.code_id,
+        code: decrypt(row.code),
+        soldAt: row.sold_at,
+      });
+    }
+
+    return Object.values(grouped);
+  }
+
+  async resendCodesEmail(orderId, adminId) {
+    // Get order + client info
+    const order = await this.getOrderById(orderId);
+    if (!order) throw new Error('Order not found');
+
+    const deliveredGroups = await this.getDeliveredCodes(orderId);
+    if (!deliveredGroups.length) throw new Error('No delivered codes found for this order');
+
+    // Build fulfilledItems shape for _sendCompletionEmail
+    const fulfilledItems = deliveredGroups.map(g => ({
+      productName: g.productName,
+      delivered: g.codes.length,
+      codes: g.codes.map(c => c.code),
+    }));
+
+    // Get ZIP password
+    const userRow = await db.queryOne(
+      'SELECT user_id, zip_password FROM users WHERE email = ?',
+      [order.clientEmail]
+    );
+    const zipPassword = userRow?.zip_password || null;
+
+    if (!zipPassword) throw new Error('No ZIP password set for this client');
+
+    const user = { full_name: order.clientName, email: order.clientEmail };
+
+    await this._sendCompletionEmail(
+      user, order.orderNumber, orderId,
+      { fulfilledItems, pendingItems: [] },
+      order.currency,
+      zipPassword
+    );
+
+    await auditService.log({
+      user_id: adminId,
+      action: 'order_email_resent',
+      entity_type: 'order',
+      entity_id: String(orderId),
+      new_values: { resentBy: adminId, codesCount: fulfilledItems.reduce((s, i) => s + i.codes.length, 0) },
+    });
+  }
   // ─── Email: order cancelled ───────────────────────────────────────────────
 
   async _sendCancellationEmail(user, orderNumber, orderId, refundAmount, refundLines, currency, reason) {

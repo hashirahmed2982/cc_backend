@@ -152,6 +152,28 @@ class OrderController {
       });
     } catch (err) { next(err); }
   }
+  async getOrderCodes(req, res, next) {
+    try {
+      const orderId = parseInt(req.params.id);
+      const order = await orderService.getOrderById(orderId);
+      if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
+      const codes = await orderService.getDeliveredCodes(orderId);
+
+      res.json({ success: true, data: { order, codes } });
+    } catch (err) { next(err); }
+  }
+
+  // ─── ADMIN: Resend order codes email ─────────────────────────────────────
+  // POST /api/v1/orders/admin/:id/resend-email
+  async resendOrderEmail(req, res, next) {
+    try {
+      const orderId = parseInt(req.params.id);
+      await orderService.resendCodesEmail(orderId, req.user.user_id);
+
+      res.json({ success: true, message: 'Order codes email resent successfully' });
+    } catch (err) { next(err); }
+  }
   async cancelOrder(req, res, next) {
     try {
       const orderId = parseInt(req.params.id);

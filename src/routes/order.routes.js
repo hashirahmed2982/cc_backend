@@ -75,6 +75,10 @@ router.post('/admin/:id/complete',
   validate,
   orderController.completeOrder
 );
+router.get( '/admin/:id/codes',        isAdmin, orderController.getOrderCodes);
+router.post('/admin/:id/resend-email', isAdmin, orderController.resendOrderEmail);
+ 
+ 
 router.post('/admin/:id/cancel',
   isAdmin,
   [
