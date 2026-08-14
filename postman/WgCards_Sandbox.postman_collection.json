@@ -1,0 +1,245 @@
+{
+  "info": {
+    "name": "WgCards Sandbox API",
+    "description": "Sandbox smoke tests for the WgCards API (V3.0.8) described in the CardCove multi-supplier integration plan. Every request/response body is AES/ECB/PKCS7 encrypted with the caller's appId (UTF-8 bytes) as the raw AES key - handled automatically by the pre-request/test scripts on each request via Postman's built-in CryptoJS. Run 'Get Token' first (its Tests script stores the token into the collection variable used by every other request).\n\nNote from the doc: 'Only addresses in the ip whitelist can be successfully accessed' - if every request times out, confirm the machine running Postman is whitelisted with WgCards, not just that credentials are correct.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "host", "value": "http://121.43.36.102:9009" },
+    { "key": "appId", "value": "2025112058411324" },
+    { "key": "accountId", "value": "2025112058411325" },
+    { "key": "appKey", "value": "o%Cmiq52TP4o06Uok&R6tC#^#FXGNE*3" },
+    { "key": "token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Get Token",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function encryptMsg(appId, obj) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.encrypt(JSON.stringify(obj), key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "const accountId = pm.collectionVariables.get('accountId');",
+              "const appKey = pm.collectionVariables.get('appKey');",
+              "const payload = { appId, appKey };",
+              "const body = { appId, accountId, msg: encryptMsg(appId, payload) };",
+              "pm.collectionVariables.set('requestBody', JSON.stringify(body));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function decryptMsg(appId, b64) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.decrypt(b64, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString(CryptoJS.enc.Utf8);",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "let raw = pm.response.text().trim();",
+              "if (raw.startsWith('\"')) raw = JSON.parse(raw);",
+              "let decrypted;",
+              "try { decrypted = JSON.parse(decryptMsg(appId, raw)); } catch (e) { console.log('decrypt failed', e.message); }",
+              "console.log('Decrypted response:', decrypted);",
+              "pm.test('code === 200', () => pm.expect(decrypted && decrypted.code).to.eql(200));",
+              "if (decrypted && decrypted.data) {",
+              "  pm.collectionVariables.set('token', decrypted.data);",
+              "  console.log('Token stored:', decrypted.data);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{{requestBody}}", "options": { "raw": { "language": "json" } } },
+        "url": { "raw": "{{host}}/api/getToken", "host": ["{{host}}"], "path": ["api", "getToken"] },
+        "description": "Rate limit: 40 requests / 60s. No auth headers required - this is what issues the 2h bearer token."
+      }
+    },
+    {
+      "name": "2. Get Account",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function encryptMsg(appId, obj) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.encrypt(JSON.stringify(obj), key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "const accountId = pm.collectionVariables.get('accountId');",
+              "const payload = { userId: appId };",
+              "const body = { appId, accountId, msg: encryptMsg(appId, payload) };",
+              "pm.collectionVariables.set('requestBody', JSON.stringify(body));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function decryptMsg(appId, b64) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.decrypt(b64, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString(CryptoJS.enc.Utf8);",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "let raw = pm.response.text().trim();",
+              "if (raw.startsWith('\"')) raw = JSON.parse(raw);",
+              "let decrypted;",
+              "try { decrypted = JSON.parse(decryptMsg(appId, raw)); } catch (e) { console.log('decrypt failed', e.message); }",
+              "console.log('Decrypted response:', decrypted);",
+              "pm.test('code === 200', () => pm.expect(decrypted && decrypted.code).to.eql(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "appId", "value": "{{appId}}" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{{requestBody}}", "options": { "raw": { "language": "json" } } },
+        "url": { "raw": "{{host}}/api/getAccount", "host": ["{{host}}"], "path": ["api", "getAccount"] },
+        "description": "Rate limit: 40 requests / 60s. Returns wallet balance(s). Requires token from 'Get Token'."
+      }
+    },
+    {
+      "name": "3. Get All Item (catalog)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function encryptMsg(appId, obj) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.encrypt(JSON.stringify(obj), key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "const accountId = pm.collectionVariables.get('accountId');",
+              "const payload = { appId, currencyCode: 'CNY', language: 'en', itemId: '', itemName: '' };",
+              "const body = { appId, accountId, msg: encryptMsg(appId, payload) };",
+              "pm.collectionVariables.set('requestBody', JSON.stringify(body));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function decryptMsg(appId, b64) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.decrypt(b64, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString(CryptoJS.enc.Utf8);",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "let raw = pm.response.text().trim();",
+              "if (raw.startsWith('\"')) raw = JSON.parse(raw);",
+              "let decrypted;",
+              "try { decrypted = JSON.parse(decryptMsg(appId, raw)); } catch (e) { console.log('decrypt failed', e.message); }",
+              "console.log('records:', decrypted && decrypted.data && decrypted.data.records && decrypted.data.records.length);",
+              "pm.test('code === 200', () => pm.expect(decrypted && decrypted.code).to.eql(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "appId", "value": "{{appId}}" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{{requestBody}}", "options": { "raw": { "language": "json" } } },
+        "url": { "raw": "{{host}}/api/getAllItem", "host": ["{{host}}"], "path": ["api", "getAllItem"] },
+        "description": "Rate limit: 20 requests / 60s. Pulls the full catalog in one call. Requires token from 'Get Token'."
+      }
+    },
+    {
+      "name": "4. Get Stock",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function encryptMsg(appId, obj) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.encrypt(JSON.stringify(obj), key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString();",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "const accountId = pm.collectionVariables.get('accountId');",
+              "const payload = { skuIds: ['2025062450882798', '2025062335235123'] };",
+              "const body = { appId, accountId, msg: encryptMsg(appId, payload) };",
+              "pm.collectionVariables.set('requestBody', JSON.stringify(body));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const CryptoJS = require('crypto-js');",
+              "function aesKey(appId) { return CryptoJS.enc.Utf8.parse(appId); }",
+              "function decryptMsg(appId, b64) {",
+              "  const key = aesKey(appId);",
+              "  return CryptoJS.AES.decrypt(b64, key, { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }).toString(CryptoJS.enc.Utf8);",
+              "}",
+              "const appId = pm.collectionVariables.get('appId');",
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "let raw = pm.response.text().trim();",
+              "if (raw.startsWith('\"')) raw = JSON.parse(raw);",
+              "let decrypted;",
+              "try { decrypted = JSON.parse(decryptMsg(appId, raw)); } catch (e) { console.log('decrypt failed', e.message); }",
+              "console.log('Decrypted response:', decrypted);",
+              "pm.test('code === 200', () => pm.expect(decrypted && decrypted.code).to.eql(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "appId", "value": "{{appId}}" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{{requestBody}}", "options": { "raw": { "language": "json" } } },
+        "url": { "raw": "{{host}}/api/getStock", "host": ["{{host}}"], "path": ["api", "getStock"] },
+        "description": "Rate limit: 40 requests / 60s. SKU ids in the sample payload are pulled directly from the doc's own examples (Nintendo JP cards). Requires token from 'Get Token'."
+      }
+    }
+  ]
+}
