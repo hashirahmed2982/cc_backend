@@ -13,6 +13,17 @@
 //   node src/jobs/catalogSync.js --page-size 50
 'use strict';
 
+// Must run before requiring ../config/database — that module reads
+// process.env.DB_* at require-time to build its connection pool. When this
+// file is required transitively (server.js -> jobs/index.js -> here),
+// server.js already loaded dotenv first, so this is a harmless no-op. When
+// this file is run standalone (node src/jobs/catalogSync.js), this is the
+// only thing that loads .env at all — putting it after the requires below
+// (as it originally was, down in the CLI block) meant database.js had
+// already built its pool with an empty DB_PASSWORD by the time dotenv ran,
+// causing 'Access denied ... NO_PASSWORD_ERROR' even with a correct .env.
+require('dotenv').config();
+
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('../services/wgcards.service');
@@ -234,7 +245,6 @@ module.exports = { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpser
 
 // ── CLI entry point ─────────────────────────────────────────────────────
 if (require.main === module) {
-  require('dotenv').config();
   run()
     .then((summary) => {
       console.log('Catalog sync complete:', JSON.stringify(summary, null, 2));
