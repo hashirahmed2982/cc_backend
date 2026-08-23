@@ -18,15 +18,15 @@ const pool = mysql.createPool({
   multipleStatements: false // Security: prevent SQL injection via multiple statements
 });
 
-// Test connection
-pool.getConnection()
-  .then(connection => {
-    logger.info('Database connection pool created successfully');
-    connection.release();
-  })
-  .catch(err => {
-    logger.error('Failed to create database connection pool:', err);
-  });
+// NOTE: connection is intentionally NOT eagerly tested here. server.js
+// already does that explicitly at boot (db.getConnection().then/.catch,
+// gating whether the HTTP server even starts) — testing it again here too
+// is pure duplication, and worse, it fires on every require('./config/
+// database') anywhere (migration scripts, one-off node -e checks, every
+// Jest test file that pulls this in transitively). Jest in particular
+// tears its module environment down before that dangling promise settles,
+// producing a confusing "trying to import after Jest environment has been
+// torn down" error — this used to happen here.
 
 // Helper function to execute queries with error handling
 const query = async (sql, params) => {
