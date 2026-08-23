@@ -17,7 +17,11 @@ async function runMigration() {
   try {
     console.log('✓ Connected to MySQL server');
 
-    const migrationFile = '000_full_schema.sql';
+    // Defaults to the fresh-install baseline (000_full_schema.sql). Pass a
+    // filename to run an incremental migration instead, e.g. against a DB
+    // that already ran 000 before this file existed:
+    //   node src/migrations/migrate.js 007_wgcards_integration.sql
+    const migrationFile = process.argv[2] || '000_full_schema.sql';
     const migrationPath = path.join(__dirname, migrationFile);
 
     if (!fs.existsSync(migrationPath)) {
@@ -31,19 +35,22 @@ async function runMigration() {
     await connection.query(sql);
 
     console.log('✅ Migration completed successfully!\n');
-    console.log('📊 Schema summary:');
-    console.log('   Tables:  19  (roles, users, viewer_accounts, sessions,');
-    console.log('                  wallets, topup_requests, wallet_transactions,');
-    console.log('                  products, product_skus, inventory, digital_codes,');
-    console.log('                  orders, order_details, client_pricing,');
-    console.log('                  client_product_access, supplier_config,');
-    console.log('                  audit_logs, api_logs, support_tickets)');
-    console.log('   Roles:   4   (super_admin, admin, b2b_client, viewer)');
-    console.log('   Seed:    1   super admin user created');
-    console.log('\n👤 Super Admin Credentials:');
-    console.log('   Email:    admin@cardcove.com');
-    console.log('   Password: Admin@123');
-    console.log('\n🎉 Start the server with: npm run dev');
+    if (migrationFile === '000_full_schema.sql') {
+      console.log('📊 Schema summary:');
+      console.log('   Tables:  21  (roles, users, viewer_accounts, sessions,');
+      console.log('                  wallets, topup_requests, wallet_transactions,');
+      console.log('                  products, product_skus, inventory, digital_codes,');
+      console.log('                  orders, order_details, client_pricing,');
+      console.log('                  client_product_access, supplier_config,');
+      console.log('                  audit_logs, api_logs, support_tickets,');
+      console.log('                  wgcards_topup_orders, system_settings)');
+      console.log('   Roles:   4   (super_admin, admin, b2b_client, viewer)');
+      console.log('   Seed:    1   super admin user created');
+      console.log('\n👤 Super Admin Credentials:');
+      console.log('   Email:    admin@cardcove.com');
+      console.log('   Password: Admin@123');
+      console.log('\n🎉 Start the server with: npm run dev');
+    }
 
   } catch (error) {
     console.error('\n❌ Migration failed:', error.message);
