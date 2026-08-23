@@ -216,9 +216,15 @@ async function run() {
       );
       console.log('\n[3] POST /api/getAllItem');
       console.log('  HTTP status:', status);
-      const recordCount = parsed && parsed.data && Array.isArray(parsed.data.records) ? parsed.data.records.length : 'n/a';
-      console.log('  Record count:', recordCount);
-      console.log('  Sample:', JSON.stringify(parsed && parsed.data && parsed.data.records && parsed.data.records[0]).slice(0, 500));
+      const records = parsed?.data?.records;
+      console.log('  Record count:', Array.isArray(records) ? records.length : 'n/a (see raw response below)');
+      if (Array.isArray(records) && records.length) {
+        console.log('  Sample record:', JSON.stringify(records[0], null, 2).slice(0, 1500));
+      } else {
+        // Shape didn't match what we expected — dump the raw parsed response
+        // so we can see what actually came back instead of crashing on it.
+        console.log('  Raw parsed response:', JSON.stringify(parsed, null, 2).slice(0, 3000));
+      }
       results.push(['getAllItem', parsed && parsed.code === 200 ? 'PASS' : 'FAIL - unexpected response']);
     } catch (err) {
       console.log('\n[3] POST /api/getAllItem');
