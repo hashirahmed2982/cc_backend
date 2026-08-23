@@ -5,6 +5,21 @@ const db = require('./src/config/database');
 
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0'; // Explicitly bind to all interfaces
+const fs   = require('fs');
+const path = require('path');
+
+// ─── Exception logging ────────────────────────────────────────────────────────
+const exceptionsLog = '/var/log/cardcove/exceptions.log';
+
+const writeException = (type, err) => {
+  const line = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    type,
+    message:   err?.message || String(err),
+    stack:     err?.stack   || null,
+  }) + '\n';
+  try { fs.appendFileSync(exceptionsLog, line); } catch {}
+};
 
 // Test database connection
 db.getConnection()
@@ -50,11 +65,15 @@ db.getConnection()
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught Exception:', error);
+  writeException('uncaughtException', err);
+  console.error('Uncaught Exception:', err);
   process.exit(1);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  writeException('unhandledRejection', reason);
+  console.error('Unhandled Rejection:', reason);
   process.exit(1);
 });

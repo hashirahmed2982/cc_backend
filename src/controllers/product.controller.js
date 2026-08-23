@@ -8,6 +8,32 @@ const XLSX           = require('xlsx');
 
 class ProductController {
 
+  // ─── GET /products/images/library ─────────────────────────────────────────
+  async getImageLibrary(req, res, next) {
+    try {
+      const baseUrl = process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const images = await productService.getImageLibrary(baseUrl);
+      res.json({ success: true, data: images });
+    } catch (err) { next(err); }
+  }
+
+  // ─── DELETE /products/images/library/:filename ────────────────────────────
+  async deleteImageFile(req, res, next) {
+    try {
+      await productService.deleteImageFile(req.params.filename);
+      res.json({ success: true, message: 'Image deleted' });
+    } catch (err) {
+      if (err.stillInUse) {
+        return res.status(409).json({
+          success: false,
+          message: err.message,
+          stillInUse: err.stillInUse,
+        });
+      }
+      next(err);
+    }
+  }
+
   // ─── GET /products ─────────────────────────────────────────────────────────
   async getAll(req, res, next) {
     try {
@@ -304,6 +330,7 @@ class ProductController {
       const brandCol    = col('brand');
       const priceCol    = col('price');
       const descCol     = col('description', 'desc');
+      const imageCol     = col('image', 'image url', 'image_url'); // ADD THIS
  
       if (nameCol === -1) {
         return res.status(400).json({ success: false, message: "Could not find a 'Product Name' column in the file" });
@@ -327,8 +354,14 @@ class ProductController {
           price:                  isNaN(parsedPrice)  ? 0 : Math.round(parsedPrice * 100) / 100,
           description:            descCol     !== -1 ? String(row[descCol]     ?? '').trim() : '',
           redemptionInstructions: '',
-          images:                 [],
+          images: imageCol !== -1 && row[imageCol]
+            ? String(row[imageCol])
+                .split(',')
+                .map(s => s.trim())
+                .filter(Boolean)
+            : [], // CHANGED from always []
         });
+  
       }
  
       if (!rows.length) {
@@ -336,6 +369,45 @@ class ProductController {
       }
  
       res.json({ success: true, data: rows, total: rows.length, fileName: req.file.originalname });
+    } catch (err) { next(err); }
+  }
+  // ─── PATCH /products/bulk-status ──────────────────────────────────────────
+  // ─── PATCH /products/bulk-status ──────────────────────────────────────────
+  async bulkSetStatus(req, res, next) {
+    try {
+      const { productIds, isActive, selectAllMatching, filters, excludeIds } = req.body;
+
+      if (typeof isActive !== 'boolean') {
+        return res.status(400).json({ success: false, message: 'isActive (boolean) is required' });
+      }
+
+      let result;
+      if (selectAllMatching) {
+        result = await productService.bulkSetStatusByFilter(filters || {}, excludeIds || [], isActive, req.user.user_id);
+      } else {
+        if (!Array.isArray(productIds) || productIds.length === 0) {
+          return res.status(400).json({ success: false, message: 'productIds array is required' });
+        }
+        result = await productService.bulkSetStatus(productIds, isActive, req.user.user_id);
+      }
+
+      await auditService.log({
+        user_id:     req.user.user_id,
+        action:      'products_bulk_status_changed',
+        entity_type: 'product',
+        entity_id:   null,
+        new_values:  selectAllMatching
+          ? { selectAllMatching: true, filters, excludeIds, isActive, count: result.updated }
+          : { productIds, isActive, count: result.updated },
+        ip_address:  req.ip,
+        user_agent:  req.get('User-Agent'),
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        message: `${result.updated} product(s) ${result.status === 'active' ? 'activated' : 'deactivated'}`,
+      });
     } catch (err) { next(err); }
   }
  
@@ -359,7 +431,7 @@ class ProductController {
             description:            String(row.description || '').trim(),
             redemptionInstructions: '',
             price:                  typeof row.price === 'number' ? row.price : 0,
-            images:                 [],
+            images:                 Array.isArray(row.images) ? row.images : [],
           }, req.user.user_id);
           results.push({ name: row.name, ok: true, id: product.id });
         } catch (err) {

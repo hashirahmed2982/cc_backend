@@ -206,44 +206,6 @@ class OrderService {
       // ── 7. Fulfill codes (outside transaction for performance) ───────────
       const fulfillResult = await this._fulfillOrder(orderId, resolvedItems, userId);
 
-      // Sync order_details delivery_status from actual delivered_qty
-      await db.query(
-        `UPDATE order_details
-      SET delivery_status = CASE
-        WHEN delivered_qty >= quantity THEN 'completed'
-        WHEN delivered_qty  > 0       THEN 'partial'
-        ELSE 'pending'
-      END
-    WHERE order_id = ?`,
-        [orderId]
-      );
-
-      // Recalculate order status from DB
-      const rows = await db.query(
-        `SELECT
-     SUM(CASE WHEN delivered_qty < quantity THEN 1 ELSE 0 END) AS incompleteLines,
-     SUM(delivered_qty) AS totalDelivered
-   FROM order_details WHERE order_id = ?`,
-        [orderId]
-      );
-      const incompleteLines = parseInt(rows[0].incompleteLines);
-      const totalDelivered = parseInt(rows[0].totalDelivered);
-
-      const orderStatus = incompleteLines === 0 ? 'completed' : totalDelivered > 0 ? 'processing' : 'pending';
-      const deliveryStatus = incompleteLines === 0 ? 'completed' : totalDelivered > 0 ? 'partial' : 'pending';
-
-      await db.query(
-        `UPDATE orders
-      SET order_status    = ?,
-          delivery_status = ?,
-          completed_at    = ${orderStatus === 'completed' ? 'NOW()' : 'NULL'}
-    WHERE order_id = ?`,
-        [orderStatus, deliveryStatus, orderId]
-      );
-
-      // Pass calculated status back in fulfillResult
-      fulfillResult.orderStatus = orderStatus;
-      fulfillResult.deliveryStatus = deliveryStatus;
       // ── 8. Send confirmation email ───────────────────────────────────────
       const [userRows] = await conn.execute(
         'SELECT full_name, email FROM users WHERE user_id = ?', [userId]
@@ -279,39 +241,69 @@ class OrderService {
   async _fulfillOrder(orderId, resolvedItems, userId) {
     const fulfilledItems = [];
     const pendingItems = [];
+    let totalFulfilled = 0;
+    let totalQty = 0;
 
     for (const item of resolvedItems) {
+      totalQty += item.quantity;
+
       if (item.source !== 'internal') {
-        pendingItems.push({ ...item, reason: 'supplier_api_pending', codes: [] });
+        pendingItems.push({ ...item, reason: 'supplier_api_pending', allocatedCodes: [] });
         continue;
       }
 
+      // Get available codes for this SKU
       const codes = await db.query(
         `SELECT code_id, code FROM digital_codes
-        WHERE sku_id = ? AND status = 'available' LIMIT ?`,
+          WHERE sku_id = ? AND status = 'available'
+          LIMIT ?`,
         [item.skuId, item.quantity]
       );
+
       const allocated = codes.slice(0, item.quantity);
       const needed = item.quantity - allocated.length;
 
       if (allocated.length > 0) {
+        // Mark codes as sold
         const codeIds = allocated.map(c => c.code_id);
         await db.query(
-          `UPDATE digital_codes SET status = 'sold', order_id = ?, sold_at = NOW()
-          WHERE code_id IN (${codeIds.map(() => '?').join(',')})`,
+          `UPDATE digital_codes
+              SET status = 'sold', order_id = ?, sold_at = NOW()
+            WHERE code_id IN (${codeIds.map(() => '?').join(',')})`,
           [orderId, ...codeIds]
         );
+
+        // Update inventory
         await db.query(
           'UPDATE inventory SET stock_quantity = stock_quantity - ? WHERE sku_id = ?',
           [allocated.length, item.skuId]
         );
-        // Accumulate delivered_qty — delivery_status updated separately after all runs
+
+        // Update order_details delivered_qty
         await db.query(
           `UPDATE order_details
-            SET delivered_qty = delivered_qty + ?
-          WHERE order_id = ? AND sku_id = ?`,
-          [allocated.length, orderId, item.skuId]
+              SET delivered_qty = ?, delivery_status = ?
+            WHERE order_id = ? AND sku_id = ?`,
+          [
+            allocated.length,
+            allocated.length >= item.quantity ? 'completed' : 'partial',
+            orderId,
+            item.skuId,
+          ]
         );
+        // await db.query(
+        //   `UPDATE order_details
+        //       SET delivered_qty = delivered_qty + ?,
+        //           delivery_status = CASE
+        //             WHEN delivered_qty + ? >= quantity THEN 'completed'
+        //             ELSE 'partial'
+        //           END
+        //     WHERE order_id = ? AND sku_id = ?`,
+        //   [allocated.length, allocated.length, orderId, item.skuId]
+        // );
+
+        totalFulfilled += allocated.length;
+
         fulfilledItems.push({
           productId: item.productId,
           productName: item.productName,
@@ -336,10 +328,29 @@ class OrderService {
       }
     }
 
-    // ── DO NOT update order/order_details status here ──────────────────────
-    // Let the caller (completeOrder / placeOrder) recalculate from DB state
+    // ── Determine order status ──────────────────────────────────────────────
+    let orderStatus, deliveryStatus;
 
-    return { fulfilledItems, pendingItems };
+    if (pendingItems.length === 0) {
+      orderStatus = 'completed';
+      deliveryStatus = 'completed';
+    } else if (fulfilledItems.length === 0) {
+      orderStatus = 'pending';
+      deliveryStatus = 'pending';
+    } else {
+      orderStatus = 'processing';
+      deliveryStatus = 'partial';
+    }
+
+    await db.query(
+      `UPDATE orders
+          SET order_status = ?, delivery_status = ?,
+              completed_at = ${orderStatus === 'completed' ? 'NOW()' : 'NULL'}
+        WHERE order_id = ?`,
+      [orderStatus, deliveryStatus, orderId]
+    );
+
+    return { fulfilledItems, pendingItems, orderStatus, deliveryStatus };
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -388,48 +399,8 @@ class OrderService {
       }));
 
       // Fulfill remaining
-      // const fulfillResult = await this._fulfillOrder(orderId, remainingItems, order.client_user_id);
-      // Fulfill whatever stock is available
       const fulfillResult = await this._fulfillOrder(orderId, remainingItems, order.client_user_id);
 
-      // ── Sync delivery_status on ALL order_details from actual delivered_qty ──
-      await db.query(
-        `UPDATE order_details
-      SET delivery_status = CASE
-        WHEN delivered_qty >= quantity THEN 'completed'
-        WHEN delivered_qty  > 0       THEN 'partial'
-        ELSE 'pending'
-      END
-    WHERE order_id = ?`,
-        [orderId]
-      );
-
-      // ── Recalculate order delivery status from DB — never trust return value ─
-      const rows = await db.query(
-        `SELECT
-     SUM(quantity)                                               AS totalQty,
-     SUM(delivered_qty)                                         AS totalDelivered,
-     SUM(CASE WHEN delivered_qty < quantity THEN 1 ELSE 0 END)  AS incompleteLines
-   FROM order_details WHERE order_id = ?`,
-        [orderId]
-      );
-
-      const incompleteLines = parseInt(rows[0].incompleteLines);
-      const totalDelivered = parseInt(rows[0].totalDelivered || 0);
-      const deliveryStatus = incompleteLines === 0 ? 'completed' : 'partial';
-
-      // ── Only mark order_status 'completed' if everything is delivered ──────────
-      // If still partial, keep as 'processing' so admin knows there's more to do
-      const orderStatus = incompleteLines === 0 ? 'completed' : 'processing';
-
-      await db.query(
-        `UPDATE orders
-      SET order_status    = ?,
-          delivery_status = ?,
-          completed_at    = ${orderStatus === 'completed' ? 'NOW()' : 'NULL'}
-    WHERE order_id = ?`,
-        [orderStatus, deliveryStatus, orderId]
-      );
       // Always mark order as completed when admin presses Complete
       // await db.query(
       //   `UPDATE orders

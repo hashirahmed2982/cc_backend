@@ -5,8 +5,6 @@ const orderService = require('../services/order.service');
 const auditService = require('../services/audit.service');
 const emailService = require('../services/email.service');
 const logger = require('../utils/logger');
-// ADD at top if not already there:
-const db = require('../config/database');
 
 class OrderController {
 
@@ -43,50 +41,6 @@ class OrderController {
         });
       } catch (emailErr) {
         logger.warn('Order confirmation email failed:', emailErr.message);
-      }
-      // In placeOrder, AFTER the existing audit log and BEFORE res.status(201).json:
-
-      // ── Notify super admins with @cardcovefzc.com ─────────────────────────────
-      try {
-        const superAdmins = await db.query(
-          `SELECT email, full_name FROM users
-      WHERE user_type = 'super_admin'
-        AND status = 'active'
-        AND email LIKE '%@cardcovefzc.com'`
-        );
-
-        if (superAdmins.length > 0) {
-          const html = `
-      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-        <h2 style="color:#1d4ed8;">🛒 New Order Received</h2>
-        <table style="width:100%;border-collapse:collapse;margin-top:16px;">
-          <tr><td style="padding:8px;color:#6b7280;width:140px;">Order Number</td><td style="padding:8px;font-weight:bold;">${result.orderNumber}</td></tr>
-          <tr style="background:#f9fafb;"><td style="padding:8px;color:#6b7280;">Client</td><td style="padding:8px;">${req.user.full_name} (${req.user.email})</td></tr>
-          <tr><td style="padding:8px;color:#6b7280;">Total Amount</td><td style="padding:8px;font-weight:bold;">USD ${result.totalAmount.toFixed(2)}</td></tr>
-          <tr style="background:#f9fafb;"><td style="padding:8px;color:#6b7280;">Status</td><td style="padding:8px;">${result.status}</td></tr>
-          <tr><td style="padding:8px;color:#6b7280;">Placed At</td><td style="padding:8px;">${new Date().toUTCString()}</td></tr>
-        </table>
-        <div style="margin-top:24px;">
-          <a href="${process.env.FRONTEND_URL}/orders"
-             style="background:#1d4ed8;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold;">
-            View Order in Admin Portal
-          </a>
-        </div>
-        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">CardCove B2B Portal — Admin Notification</p>
-      </div>`;
-
-          await Promise.all(superAdmins.map(admin =>
-            emailService.sendEmail(
-              admin.email,
-              `New Order ${result.orderNumber} — USD ${result.totalAmount.toFixed(2)} from ${req.user.full_name}`,
-              html,
-              `New order ${result.orderNumber} placed by ${req.user.full_name} for USD ${result.totalAmount.toFixed(2)}`
-            )
-          ));
-        }
-      } catch (notifyErr) {
-        // Non-fatal — don't fail the order if notification fails
-        logger.warn('Super admin order notification failed:', notifyErr.message);
       }
 
       res.status(201).json({
