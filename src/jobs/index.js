@@ -7,6 +7,7 @@
 const cron = require('node-cron');
 const logger = require('../utils/logger');
 const catalogSync = require('./catalogSync');
+const stockSync = require('./stockSync');
 
 function guarded(name, fn) {
   return async () => {
@@ -24,6 +25,10 @@ function start() {
   // Job #1 — Catalog Sync, every 6h (Flow B1).
   cron.schedule('0 */6 * * *', guarded('catalogSync', () => catalogSync.run()));
   logger.info('[cron] registered: catalogSync (every 6h)');
+
+  // Job #2 — Stock Sync, every 60 min (Flow C).
+  cron.schedule('0 * * * *', guarded('stockSync', () => stockSync.run()));
+  logger.info('[cron] registered: stockSync (every 60 min)');
 }
 
 module.exports = { start };
