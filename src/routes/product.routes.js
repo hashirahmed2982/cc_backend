@@ -1,6 +1,9 @@
 // routes/product.routes.js
 'use strict';
-
+// ADD at the top after existing requires:
+const path   = require('path');
+const crypto = require('crypto');
+const fs     = require('fs');
 const express    = require('express');
 const router     = express.Router();
 const multer     = require('multer');
@@ -9,6 +12,9 @@ const { body, param } = require('express-validator');
 const productController     = require('../controllers/product.controller');
 const { protect, isAdmin }  = require('../middleware/auth');
 const { validate }          = require('../middleware/validation');
+
+
+
 
 // ─── Multer (in-memory, Excel only) ──────────────────────────────────────────
 const upload = multer({
@@ -19,6 +25,30 @@ const upload = multer({
     ext === 'xlsx' || ext === 'xls'
       ? cb(null, true)
       : cb(new Error('Only .xlsx and .xls files are allowed'), false);
+  },
+});
+// Image upload storage — same pattern as wallet receipts
+const imageUploadDir = path.join(__dirname, '../../uploads/products');
+fs.mkdirSync(imageUploadDir, { recursive: true });
+
+const imageStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, imageUploadDir),
+  filename: (req, file, cb) => {
+    const ext    = path.extname(file.originalname).toLowerCase();
+    const unique = crypto.randomBytes(12).toString('hex');
+    cb(null, `product_${unique}${ext}`);
+  },
+  
+});
+
+const imageUpload = multer({
+  storage: imageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    allowed.includes(file.mimetype)
+      ? cb(null, true)
+      : cb(new Error('Only JPG, PNG, WebP allowed'), false);
   },
 });
 
@@ -82,6 +112,21 @@ router.get('/:id', isAdmin, param('id').isInt(), validate, productController.get
 //            supplierName, supplierRef, supplierSkuRef?,
 //            realtimePrice?, syncEnabled?, images? }
 //
+router.get('/images/library', isAdmin, productController.getImageLibrary);
+router.delete('/images/library/:filename', isAdmin, productController.deleteImageFile);
+router.patch('/bulk-status', isAdmin, productController.bulkSetStatus);
+router.post('/upload-image', isAdmin, imageUpload.single('image'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Image file is required' });
+    }
+
+    const baseUrl = process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const url     = `${baseUrl}/uploads/products/${req.file.filename}`;
+
+    res.json({ success: true, data: { url } });
+  } catch (err) { next(err); }
+});
 router.post('/internal', isAdmin, baseProductRules,     validate, productController.createInternal);
 router.post('/supplier', isAdmin, supplierProductRules, validate, productController.createSupplier);
 

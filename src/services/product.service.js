@@ -4,6 +4,10 @@
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
+const fs = require('fs').promises;
+const path = require('path');
+
+const IMAGE_DIR = path.join(__dirname, '../../uploads/products'); // matches routes/product.routes.js
 
 // ─── AES-256-CBC encryption for digital codes ────────────────────────────────
 const RAW_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-this!!';
@@ -488,6 +492,111 @@ class ProductService {
       return { available: true, stockLevel: 'live', price: product.price, note: 'Real-time — API not yet connected' };
     } catch (err) { logger.error('ProductService.checkSupplierStock:', err); throw err; }
   }
+  // ══════════════════════════════════════════════════════════════════════════
+  //  IMAGE LIBRARY
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async getImageLibrary(baseUrl) {
+    try {
+      const files = await fs.readdir(IMAGE_DIR);
+      const imageFiles = files.filter(f => /\.(jpe?g|png|webp)$/i.test(f));
+
+      // Map filename -> which products currently reference it, so the UI
+      // can warn before someone deletes an image still in use.
+      const products = await db.query(
+        `SELECT product_id, product_name, image_url FROM products
+         WHERE image_url IS NOT NULL AND image_url != ''`
+      );
+      const usageMap = {};
+      for (const p of products) {
+        let urls = [];
+        try { urls = JSON.parse(p.image_url); } catch { urls = [p.image_url]; }
+        for (const url of urls) {
+          const fname = decodeURIComponent(String(url).split('/').pop());
+          (usageMap[fname] ||= []).push({ id: p.product_id, name: p.product_name });
+        }
+      }
+
+      const results = await Promise.all(imageFiles.map(async (filename) => {
+        const stat = await fs.stat(path.join(IMAGE_DIR, filename));
+        return {
+          filename,
+          url: `${baseUrl}/uploads/products/${filename}`,
+          sizeKb: Math.round(stat.size / 1024),
+          uploadedAt: stat.mtime,
+          usedBy: usageMap[filename] || [],
+        };
+      }));
+
+      return results.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+    } catch (err) {
+      logger.error('ProductService.getImageLibrary:', err);
+      throw err;
+    }
+  }
+
+  async deleteImageFile(filename) {
+    try {
+      // Guard against path traversal — filename must match your generated pattern
+      if (!/^product_[a-f0-9]+\.(jpe?g|png|webp)$/i.test(filename)) {
+        throw new Error('Invalid filename');
+      }
+
+      const products = await db.query(
+        `SELECT product_id, product_name, image_url FROM products
+         WHERE image_url LIKE ?`, [`%${filename}%`]
+      );
+      if (products.length > 0) {
+        const err = new Error(`Image is still used by ${products.length} product(s)`);
+        err.stillInUse = products.map(p => ({ id: p.product_id, name: p.product_name }));
+        throw err;
+      }
+
+      await fs.unlink(path.join(IMAGE_DIR, filename));
+      return { deleted: true };
+    } catch (err) {
+      logger.error('ProductService.deleteImageFile:', err);
+      throw err;
+    }
+  }
+  async bulkSetStatusByFilter(filters, excludeIds, isActive, updatedBy) {
+    try {
+      const conds = [], params = [];
+      const { search, category, brand, status, source } = filters || {};
+
+      if (search) {
+        conds.push('(p.product_name LIKE ? OR p.brand_name LIKE ? OR p.category LIKE ? OR CAST(p.product_id AS CHAR) LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      }
+      if (category) { conds.push('p.category = ?'); params.push(category); }
+      if (brand) { conds.push('p.brand_name = ?'); params.push(brand); }
+      if (source) { conds.push('p.source = ?'); params.push(source); }
+      if (status === 'active') conds.push('p.is_active = 1');
+      if (status === 'inactive') conds.push('p.is_active = 0');
+
+      if (Array.isArray(excludeIds) && excludeIds.length > 0) {
+        conds.push(`p.product_id NOT IN (${excludeIds.map(() => '?').join(',')})`);
+        params.push(...excludeIds);
+      }
+
+      const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
+      const countRow = await db.queryOne(`SELECT COUNT(*) AS n FROM products p ${where}`, params);
+      const matchCount = countRow?.n || 0;
+
+      if (matchCount > 0) {
+        await db.query(
+          `UPDATE products p SET p.is_active = ?, p.updated_by = ? ${where}`,
+          [isActive ? 1 : 0, updatedBy, ...params]
+        );
+      }
+
+      return { updated: matchCount, status: isActive ? 'active' : 'inactive' };
+    } catch (err) {
+      logger.error('ProductService.bulkSetStatusByFilter:', err);
+      throw err;
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   //  PRIVATE
@@ -543,6 +652,7 @@ class ProductService {
     if (pct < 60) return 'medium';
     return 'high';
   }
+  
 }
 
 module.exports = new ProductService();

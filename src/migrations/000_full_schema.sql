@@ -517,27 +517,27 @@ CREATE TABLE IF NOT EXISTS topup_requests (
     CONSTRAINT chk_topup_amount CHECK (amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE products
-  ADD COLUMN supplier_name   VARCHAR(100)  NULL  COMMENT 'e.g. carrypin'              AFTER source,
-  ADD COLUMN supplier_ref    VARCHAR(100)  NULL  COMMENT 'Supplier SPU/product ID'    AFTER supplier_name,
-  ADD COLUMN sync_enabled    BOOLEAN       NOT NULL DEFAULT FALSE
-                                                   COMMENT 'Auto-sync price/stock'    AFTER supplier_ref,
-  ADD COLUMN last_synced_at  DATETIME      NULL   COMMENT 'Last supplier sync'        AFTER sync_enabled;
+-- ALTER TABLE products
+-- --   ADD COLUMN supplier_name   VARCHAR(100)  NULL  COMMENT 'e.g. carrypin'              AFTER source,
+-- --   ADD COLUMN supplier_ref    VARCHAR(100)  NULL  COMMENT 'Supplier SPU/product ID'    AFTER supplier_name,
+--   ADD COLUMN sync_enabled    BOOLEAN       NOT NULL DEFAULT FALSE
+--                                                    COMMENT 'Auto-sync price/stock'    AFTER supplier_ref,
+--   ADD COLUMN last_synced_at  DATETIME      NULL   COMMENT 'Last supplier sync'        AFTER sync_enabled;
 
-─── 2. Add supplier fields to product_skus table ────────────────────────────
+-- ─── 2. Add supplier fields to product_skus table ────────────────────────────
 ALTER TABLE product_skus
   ADD COLUMN supplier_sku_ref   VARCHAR(100) NULL COMMENT 'Supplier SKU/denomination ID' AFTER carrypin_sku_id,
   ADD COLUMN realtime_price     BOOLEAN      NOT NULL DEFAULT FALSE
                                                       COMMENT 'Fetch price live from supplier' AFTER supplier_sku_ref,
   ADD COLUMN face_value_display VARCHAR(50)  NULL COMMENT 'Display label e.g. $50'    AFTER realtime_price;
 
-─── 3. Add source flag to digital_codes (already has source col) ─────────────
-digital_codes.source already supports: 'manual','excel_upload','carrypin_api' ✓
+-- ─── 3. Add source flag to digital_codes (already has source col) ─────────────
+-- digital_codes.source already supports: 'manual','excel_upload','carrypin_api' ✓
 
-─── 4. inventory.unlimited_stock already exists ──────────────────────────────
-When source='carrypin': unlimited_stock=TRUE, stock_quantity not tracked ✓
+-- -- ─── 4. inventory.unlimited_stock already exists ──────────────────────────────
+-- When source='carrypin': unlimited_stock=TRUE, stock_quantity not tracked ✓
 
-─── 5. Add index for supplier lookups ────────────────────────────────────────
+-- ─── 5. Add index for supplier lookups ────────────────────────────────────────
 ALTER TABLE products
   ADD INDEX idx_source         (source),
   ADD INDEX idx_supplier_name  (supplier_name),
@@ -549,8 +549,8 @@ ALTER TABLE product_skus
 ALTER TABLE digital_codes
   ADD UNIQUE KEY uq_sku_code (sku_id, code(255));
 
-ALTER TABLE users
-  ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER `2fa_secret`;
+-- ALTER TABLE users
+--   ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER `2fa_secret`;
 ALTER TABLE digital_codes
   ADD COLUMN code_hash VARCHAR(64) NULL AFTER code;
 
@@ -578,20 +578,20 @@ INSERT INTO roles (role_name, description, permissions) VALUES
 ('b2b_client',  'B2B Client with client portal access',         '{"view_products": true, "place_orders": true, "view_wallet": true}'),
 ('viewer',      'Viewer account with limited access',            '{"view_products": true, "view_orders": true}');
 
-Super admin user (password: Admin@123)
--- INSERT INTO users (email, password_hash, full_name, role_id, user_type, status, email_verified)
--- VALUES (
---     'admin@cardcove.com',
---     '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lXkB.8RkF2tS',
---     'Super Admin',
---     1,
---     'super_admin',
---     'active',
---     TRUE
--- );
+-- Super admin user (password: Admin@123)
+-- -- INSERT INTO users (email, password_hash, full_name, role_id, user_type, status, email_verified)
+-- -- VALUES (
+-- --     'admin@cardcove.com',
+-- --     '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lXkB.8RkF2tS',
+-- --     'Super Admin',
+-- --     1,
+-- --     'super_admin',
+-- --     'active',
+-- --     TRUE
+-- -- );
 
-INSERT INTO wallets (user_id, balance, currency, status)
-VALUES (1, 0.00, 'USD', 'active');
+-- INSERT INTO wallets (user_id, balance, currency, status)
+-- VALUES (1, 0.00, 'USD', 'active');
 
 -- ============================================
 -- COMPLETED

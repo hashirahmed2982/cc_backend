@@ -195,7 +195,6 @@ class AdminDashboardService {
 
 
   async _getRecentActivity(requestingUser) {
-    // super_admin sees all; admin sees only their own actions
     const isSuperAdmin = requestingUser.user_type === 'super_admin';
     const userFilter = isSuperAdmin ? '' : `AND al.user_id = ${parseInt(requestingUser.user_id)}`;
     const userFilterOrders = isSuperAdmin ? '' : `AND u.user_id = ${parseInt(requestingUser.user_id)}`;
@@ -203,70 +202,67 @@ class AdminDashboardService {
 
     const rows = await db.query(`
     SELECT * FROM (
-      SELECT
-        'user_registered'  AS type,
-        u.full_name        AS actor,
-        u.email            AS detail,
-        u.created_at       AS timestamp
-      FROM users u
-      WHERE u.user_type = 'b2b_client'
-      ${userFilterOrders}
+
+      SELECT type, actor, detail, timestamp FROM (
+        SELECT 'user_registered' AS type, u.full_name AS actor, u.email AS detail, u.created_at AS timestamp
+        FROM users u
+        WHERE u.user_type = 'b2b_client' ${userFilterOrders}
+        ORDER BY u.created_at DESC LIMIT 10
+      ) t1
 
       UNION ALL
 
-      SELECT
-        CASE tr.status
-          WHEN 'approved' THEN 'topup_approved'
-          WHEN 'rejected' THEN 'topup_rejected'
-          ELSE 'topup_requested'
-        END                AS type,
-        u.full_name        AS actor,
-        u.email            AS detail,
-        tr.created_at      AS timestamp
-      FROM topup_requests tr
-      JOIN users u ON u.user_id = tr.user_id
-      ${userFilterTopups}
+      SELECT type, actor, detail, timestamp FROM (
+        SELECT
+          CASE tr.status WHEN 'approved' THEN 'topup_approved' WHEN 'rejected' THEN 'topup_rejected' ELSE 'topup_requested' END AS type,
+          u.full_name AS actor, u.email AS detail, tr.created_at AS timestamp
+        FROM topup_requests tr
+        JOIN users u ON u.user_id = tr.user_id
+        ${userFilterTopups}
+        ORDER BY tr.created_at DESC LIMIT 10
+      ) t2
 
       UNION ALL
 
-      SELECT
-        'order_placed'     AS type,
-        u.full_name        AS actor,
-        o.order_number     AS detail,
-        o.created_at       AS timestamp
-      FROM orders o
-      JOIN users u ON u.user_id = o.user_id
-      ${userFilterOrders}
+      SELECT type, actor, detail, timestamp FROM (
+        SELECT 'order_placed' AS type, u.full_name AS actor, o.order_number AS detail, o.created_at AS timestamp
+        FROM orders o
+        JOIN users u ON u.user_id = o.user_id
+        ${userFilterOrders}
+        ORDER BY o.created_at DESC LIMIT 10
+      ) t3
 
       UNION ALL
 
-      SELECT
-        CASE al.action
-          WHEN 'user_lock'            THEN 'user_locked'
-          WHEN 'user_unlock'          THEN 'user_unlocked'
-          WHEN 'user_permanent_block' THEN 'user_permanently_blocked'
-          WHEN 'user_creation'        THEN 'user_created'
-          WHEN 'user_update'          THEN 'user_updated'
-          WHEN 'user_delete'          THEN 'user_deleted'
-          WHEN 'viewer_account_creation' THEN 'viewer_created'
-          WHEN 'wallet_settlement'    THEN 'wallet_settled'
-          WHEN 'password_reset_admin' THEN 'password_reset'
-          WHEN 'user_product_config_saved' THEN 'product_config_saved'
-          ELSE al.action
-        END                            AS type,
-        COALESCE(admin.full_name, 'System') AS actor,
-        COALESCE(target.email, CONCAT('User #', al.entity_id)) AS detail,
-        al.created_at                  AS timestamp
-      FROM audit_logs al
-      LEFT JOIN users admin  ON admin.user_id  = al.user_id
-      LEFT JOIN users target ON target.user_id = CAST(al.entity_id AS UNSIGNED)
-      WHERE al.action IN (
-        'user_lock', 'user_unlock', 'user_permanent_block',
-        'user_creation', 'user_update', 'user_delete',
-        'viewer_account_creation', 'wallet_settlement',
-        'password_reset_admin', 'user_product_config_saved'
-      )
-      ${userFilter}
+      SELECT type, actor, detail, timestamp FROM (
+        SELECT
+          CASE al.action
+            WHEN 'user_lock'               THEN 'user_locked'
+            WHEN 'user_unlock'             THEN 'user_unlocked'
+            WHEN 'user_permanent_block'    THEN 'user_permanently_blocked'
+            WHEN 'user_creation'           THEN 'user_created'
+            WHEN 'user_update'             THEN 'user_updated'
+            WHEN 'user_delete'             THEN 'user_deleted'
+            WHEN 'viewer_account_creation' THEN 'viewer_created'
+            WHEN 'wallet_settlement'       THEN 'wallet_settled'
+            WHEN 'password_reset_admin'    THEN 'password_reset'
+            WHEN 'user_product_config_saved' THEN 'product_config_saved'
+            ELSE al.action
+          END AS type,
+          COALESCE(admin.full_name, 'System') AS actor,
+          COALESCE(target.email, CONCAT('User #', al.entity_id)) AS detail,
+          al.created_at AS timestamp
+        FROM audit_logs al
+        LEFT JOIN users admin  ON admin.user_id  = al.user_id
+        LEFT JOIN users target ON target.user_id = CAST(al.entity_id AS UNSIGNED)
+        WHERE al.action IN (
+          'user_lock', 'user_unlock', 'user_permanent_block',
+          'user_creation', 'user_update', 'user_delete',
+          'viewer_account_creation', 'wallet_settlement',
+          'password_reset_admin', 'user_product_config_saved'
+        ) ${userFilter}
+        ORDER BY al.created_at DESC LIMIT 10
+      ) t4
 
     ) combined
     ORDER BY timestamp DESC
