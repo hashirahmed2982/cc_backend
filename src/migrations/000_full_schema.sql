@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
 -- ============================================
 CREATE TABLE IF NOT EXISTS products (
     product_id INT PRIMARY KEY AUTO_INCREMENT,
-    spu_id VARCHAR(100) NULL COMMENT 'CarryPin SPU ID',
+    spu_id VARCHAR(100) NULL COMMENT 'Supplier SPU ID',
     product_name VARCHAR(255) NOT NULL,
     brand_name VARCHAR(255) NULL,
     description TEXT NULL,
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS products (
     image_url VARCHAR(500) NULL,
     how_exchange TEXT NULL COMMENT 'Redemption instructions',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    source ENUM('internal', 'carrypin') NOT NULL DEFAULT 'internal',
+    source ENUM('internal', 'wgcards', 'gift2games') NOT NULL DEFAULT 'internal',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     created_by INT NULL,
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS product_skus (
     sku_id INT PRIMARY KEY AUTO_INCREMENT,
     product_id INT NOT NULL,
-    carrypin_sku_id VARCHAR(100) NULL COMMENT 'CarryPin SKU ID',
+    wgcards_sku_id VARCHAR(100) NULL COMMENT 'WgCards SKU ID (itemId/skuId)',
     sku_name VARCHAR(255) NOT NULL,
     face_value DECIMAL(10,2) NULL COMMENT 'Denomination',
     is_custom_value BOOLEAN NOT NULL DEFAULT FALSE,
@@ -204,12 +204,14 @@ CREATE TABLE IF NOT EXISTS product_skus (
     selling_price DECIMAL(10,2) NOT NULL COMMENT 'Default selling price',
     price_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     margin_percent DECIMAL(5,2) NULL COMMENT 'Calculated margin',
+    needs_review BOOLEAN NOT NULL DEFAULT FALSE
+        COMMENT 'selling_price was auto-set via default margin on first sync — admin has not confirmed it yet',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
     INDEX idx_product_id (product_id),
-    INDEX idx_carrypin_sku_id (carrypin_sku_id),
+    INDEX idx_wgcards_sku_id (wgcards_sku_id),
     INDEX idx_is_active (is_active),
     CONSTRAINT chk_prices CHECK (selling_price >= cost_price)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -225,7 +227,7 @@ CREATE TABLE IF NOT EXISTS inventory (
     available_qty INT GENERATED ALWAYS AS (stock_quantity - reserved_qty) STORED,
     unlimited_stock BOOLEAN NOT NULL DEFAULT FALSE,
     reorder_level INT NULL,
-    last_sync DATETIME NULL COMMENT 'Last CarryPin sync',
+    last_sync DATETIME NULL COMMENT 'Last supplier stock sync',
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id) ON DELETE CASCADE,
     INDEX idx_sku_id (sku_id),
@@ -245,7 +247,7 @@ CREATE TABLE IF NOT EXISTS digital_codes (
     order_id INT NULL,
     reserved_at DATETIME NULL,
     sold_at DATETIME NULL,
-    source ENUM('manual', 'excel_upload', 'carrypin_api') NOT NULL DEFAULT 'manual',
+    source ENUM('manual', 'excel_upload', 'wgcards_api', 'gift2games_api') NOT NULL DEFAULT 'manual',
     upload_batch VARCHAR(100) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by INT NULL,
@@ -265,7 +267,7 @@ CREATE TABLE IF NOT EXISTS orders (
     order_number VARCHAR(50) NOT NULL UNIQUE,
     user_id INT NOT NULL,
     service_order VARCHAR(100) NULL COMMENT 'Client reference',
-    carrypin_order_id VARCHAR(100) NULL COMMENT 'Supplier reference',
+    wgcards_order_id VARCHAR(100) NULL COMMENT 'Supplier order reference (serviceOrder/orderId)',
     order_status ENUM('pending', 'processing', 'completed', 'failed', 'cancelled') NOT NULL DEFAULT 'pending',
     delivery_status ENUM('pending', 'partial', 'completed', 'failed') NOT NULL DEFAULT 'pending',
     total_amount DECIMAL(15,2) NOT NULL,
@@ -280,7 +282,7 @@ CREATE TABLE IF NOT EXISTS orders (
     INDEX idx_order_number (order_number),
     INDEX idx_user_id (user_id),
     INDEX idx_order_status (order_status),
-    INDEX idx_carrypin_order_id (carrypin_order_id),
+    INDEX idx_wgcards_order_id (wgcards_order_id),
     INDEX idx_created_at (created_at),
     CONSTRAINT chk_amount CHECK (total_amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -397,12 +399,20 @@ CREATE TABLE IF NOT EXISTS supplier_config (
     api_base_url VARCHAR(255) NOT NULL,
     token TEXT NULL COMMENT 'Current authentication token',
     token_expires DATETIME NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE COMMENT 'Admin on/off switch',
     rate_limits JSON NULL,
     last_sync DATETIME NULL,
+    consecutive_failures INT NOT NULL DEFAULT 0 COMMENT 'Flow A/G circuit breaker — resets on any success',
+    integration_status ENUM('healthy', 'down') NOT NULL DEFAULT 'healthy'
+        COMMENT 'down = 3 consecutive auth/balance failures; products from this supplier show temporarily unavailable',
+    down_since DATETIME NULL,
+    balance DECIMAL(15,2) NULL COMMENT 'Last known balance from Flow G getAccount/check_balance',
+    balance_currency VARCHAR(3) NULL,
+    balance_checked_at DATETIME NULL,
+    low_balance_threshold DECIMAL(15,2) NULL COMMENT 'Alert admin when balance drops below this',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_supplier_name (supplier_name)
+    UNIQUE INDEX idx_supplier_name (supplier_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -442,15 +452,17 @@ CREATE TABLE IF NOT EXISTS api_logs (
     status_code INT NOT NULL,
     response_time INT NOT NULL COMMENT 'milliseconds',
     ip_address VARCHAR(50) NULL,
-    carrypin_request TEXT NULL,
-    carrypin_response TEXT NULL,
+    supplier_request TEXT NULL COMMENT 'ENCRYPTED — raw request payload sent to supplier',
+    supplier_response TEXT NULL COMMENT 'ENCRYPTED — raw response payload received from supplier',
+    supplier_name VARCHAR(50) NULL COMMENT 'wgcards | gift2games',
     error_message TEXT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL,
     INDEX idx_user_id (user_id),
     INDEX idx_endpoint (endpoint),
     INDEX idx_status_code (status_code),
-    INDEX idx_created_at (created_at)
+    INDEX idx_created_at (created_at),
+    INDEX idx_supplier_name (supplier_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -518,7 +530,7 @@ CREATE TABLE IF NOT EXISTS topup_requests (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ALTER TABLE products
--- --   ADD COLUMN supplier_name   VARCHAR(100)  NULL  COMMENT 'e.g. carrypin'              AFTER source,
+-- --   ADD COLUMN supplier_name   VARCHAR(100)  NULL  COMMENT 'e.g. wgcards'                AFTER source,
 -- --   ADD COLUMN supplier_ref    VARCHAR(100)  NULL  COMMENT 'Supplier SPU/product ID'    AFTER supplier_name,
 --   ADD COLUMN sync_enabled    BOOLEAN       NOT NULL DEFAULT FALSE
 --                                                    COMMENT 'Auto-sync price/stock'    AFTER supplier_ref,
@@ -526,16 +538,16 @@ CREATE TABLE IF NOT EXISTS topup_requests (
 
 -- ─── 2. Add supplier fields to product_skus table ────────────────────────────
 ALTER TABLE product_skus
-  ADD COLUMN supplier_sku_ref   VARCHAR(100) NULL COMMENT 'Supplier SKU/denomination ID' AFTER carrypin_sku_id,
+  ADD COLUMN supplier_sku_ref   VARCHAR(100) NULL COMMENT 'Supplier SKU/denomination ID' AFTER wgcards_sku_id,
   ADD COLUMN realtime_price     BOOLEAN      NOT NULL DEFAULT FALSE
                                                       COMMENT 'Fetch price live from supplier' AFTER supplier_sku_ref,
   ADD COLUMN face_value_display VARCHAR(50)  NULL COMMENT 'Display label e.g. $50'    AFTER realtime_price;
 
 -- ─── 3. Add source flag to digital_codes (already has source col) ─────────────
--- digital_codes.source already supports: 'manual','excel_upload','carrypin_api' ✓
+-- digital_codes.source already supports: 'manual','excel_upload','wgcards_api','gift2games_api' ✓
 
 -- -- ─── 4. inventory.unlimited_stock already exists ──────────────────────────────
--- When source='carrypin': unlimited_stock=TRUE, stock_quantity not tracked ✓
+-- When source='wgcards'/'gift2games': unlimited_stock=TRUE, stock_quantity not tracked ✓
 
 -- ─── 5. Add index for supplier lookups ────────────────────────────────────────
 ALTER TABLE products
@@ -567,6 +579,61 @@ ALTER TABLE users
   -- Fix existing sessions to UTC (subtract your offset, e.g. -5 hours for UTC+5)
 UPDATE sessions SET last_activity = CONVERT_TZ(last_activity, '+05:00', '+00:00');
 UPDATE sessions SET expires_at    = CONVERT_TZ(expires_at,    '+05:00', '+00:00');
+
+-- ============================================
+-- 20. WGCARDS TOP-UP ORDERS TABLE (Flow F)
+-- ============================================
+-- Direct-topup product type: distinct from `orders`/`order_details` (card
+-- purchases) and from `topup_requests` (client wallet funding — unrelated).
+-- This tracks a single WgCards placeDirectOrder call end to end, including
+-- the webhook/reconciler race described in Flow F.
+CREATE TABLE IF NOT EXISTS wgcards_topup_orders (
+    topup_order_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL COMMENT 'Client who placed the top-up',
+    sku_id INT NOT NULL,
+    order_reference VARCHAR(100) NOT NULL COMMENT 'Our UUID — WgCards echoes it back',
+    wgcards_order_id VARCHAR(100) NULL COMMENT 'Supplier orderId once placeDirectOrder responds',
+    target_account VARCHAR(255) NOT NULL COMMENT 'Phone/account number being topped up',
+    amount DECIMAL(15,2) NOT NULL,
+    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    status ENUM('pending', 'confirmed', 'failed', 'cancelled') NOT NULL DEFAULT 'pending',
+    webhook_status TINYINT NULL COMMENT 'Raw 0/1/2 from WgCards webhook payload, if received',
+    webhook_received_at DATETIME NULL,
+    webhook_attempts INT NOT NULL DEFAULT 0 COMMENT 'WgCards retries up to 5x within 30 min',
+    resolved_via ENUM('webhook', 'reconciler') NULL
+        COMMENT 'Which path confirmed the final status — for the admin queue (comment on visibility)',
+    last_payload JSON NULL COMMENT 'Most recent webhook or reconciler poll payload, for support debugging',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    resolved_at DATETIME NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id),
+    UNIQUE INDEX idx_order_reference (order_reference),
+    INDEX idx_wgcards_order_id (wgcards_order_id),
+    INDEX idx_status (status),
+    INDEX idx_user_id (user_id),
+    -- Cron #5 (reconciler) scans exactly this: pending rows past the 35-min mark
+    INDEX idx_status_created (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- 21. SYSTEM SETTINGS TABLE
+-- ============================================
+-- Generic key/value settings store. First consumer: the default profit
+-- margin applied to a newly-synced SKU with no selling_price yet
+-- (products.needs_review flags it for admin confirmation afterwards).
+CREATE TABLE IF NOT EXISTS system_settings (
+    setting_key VARCHAR(100) PRIMARY KEY,
+    setting_value VARCHAR(500) NOT NULL,
+    description VARCHAR(255) NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_by INT NULL,
+    FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO system_settings (setting_key, setting_value, description) VALUES
+('default_margin_percent', '20', 'Applied to cost_price for a newly-synced SKU with no selling_price yet')
+ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
 -- ============================================
 -- INITIAL DATA

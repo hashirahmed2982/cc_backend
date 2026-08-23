@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "migrate": "node src/migrations/migrate.js",
     "seed": "node src/migrations/seed.js",
+    "seed:wgcards": "node src/migrations/seed_wgcards_config.js",
     "test": "jest --coverage"
   },
   "keywords": [

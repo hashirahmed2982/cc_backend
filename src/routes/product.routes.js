@@ -66,7 +66,7 @@ const baseProductRules = [
 
 const supplierProductRules = [
   ...baseProductRules,
-  body('supplierName').trim().notEmpty().withMessage('Supplier name is required (e.g. carrypin)'),
+  body('supplierName').trim().notEmpty().withMessage('Supplier name is required (e.g. wgcards)'),
   body('supplierRef').trim().notEmpty().withMessage('Supplier product/SPU reference is required'),
   body('supplierSkuRef').optional().trim(),
   body('faceValue').optional().isFloat({ gt: 0 }),

@@ -3,37 +3,11 @@
 
 const db = require('../config/database');
 const logger = require('../utils/logger');
-const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('path');
+const { encrypt, decrypt, hashCode } = require('../utils/dataCrypto');
 
 const IMAGE_DIR = path.join(__dirname, '../../uploads/products'); // matches routes/product.routes.js
-
-// ─── AES-256-CBC encryption for digital codes ────────────────────────────────
-const RAW_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-this!!';
-const ENCRYPTION_KEY = Buffer.from(RAW_KEY.padEnd(32, '0').slice(0, 32));
-const IV_LENGTH = 16;
-
-function encrypt(text) {
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
-  const enc = Buffer.concat([cipher.update(String(text)), cipher.final()]);
-  return iv.toString('hex') + ':' + enc.toString('hex');
-}
-function hashCode(code) {
-  // Deterministic hash — same plaintext always gives same hash
-  return crypto.createHmac('sha256', process.env.ENCRYPTION_KEY)
-    .update(code.trim().toLowerCase())
-    .digest('hex');
-}
-
-function decrypt(text) {
-  try {
-    const [ivHex, encHex] = text.split(':');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), Buffer.from(ivHex, 'hex'));
-    return Buffer.concat([decipher.update(Buffer.from(encHex, 'hex')), decipher.final()]).toString();
-  } catch { return text; }
-}
 
 // ─── Reusable SELECT fragment ─────────────────────────────────────────────────
 const PRODUCT_SELECT = `
@@ -209,7 +183,8 @@ class ProductService {
         data.category || null,
         data.images?.length ? JSON.stringify(data.images) : null,
         data.redemptionInstructions || null,
-        data.supplierName || 'carrypin',
+        data.source || 'wgcards',        // was missing — shifted every param below by one column
+        data.supplierName || 'wgcards',
         data.supplierRef || null,
         data.syncEnabled ? 1 : 0,
         createdBy,
@@ -222,7 +197,7 @@ class ProductService {
 
       const [sr] = await conn.execute(`
         INSERT INTO product_skus
-          (product_id, sku_name, carrypin_sku_id, supplier_sku_ref,
+          (product_id, sku_name, wgcards_sku_id, supplier_sku_ref,
            face_value, cost_price, selling_price, price_currency,
            realtime_price, is_active)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'USD', ?, 1)
