@@ -44,6 +44,21 @@ describe('attemptWgCardsFulfillment', () => {
     expect(wgcardsService.placeOrder).not.toHaveBeenCalled();
   });
 
+  test('a Direct Top-Up product (spu_type: 5) is rejected fast, without ever calling placeOrder', async () => {
+    // Confirmed live: WgCards rejects /api/placeOrder for these with
+    // "no direct top-up parameter info" — burning 2 pointless retries
+    // every time until Flow F exists. Fail fast instead.
+    db.queryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ wgcards_sku_id: 'wg-1', is_custom_value: 0, spu_type: 5 });
+
+    const result = await attemptWgCardsFulfillment({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+    expect(result).toEqual({ success: false, reason: 'requires_direct_topup_flow' });
+    expect(wgcardsService.placeOrder).not.toHaveBeenCalled();
+    expect(wgcardsService.getItemAndStock).not.toHaveBeenCalled();
+  });
+
   test('happy path: places the order and records service_order/order_id/pending_reason', async () => {
     db.queryOne
       .mockResolvedValueOnce(null)

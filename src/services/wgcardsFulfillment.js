@@ -14,6 +14,9 @@ const wgcardsService = require('./wgcards.service');
 // "retry network/timeout only: 2 retries, 2s -> 6s backoff" (§6)
 const RETRY_DELAYS_MS = [2000, 6000];
 
+// products.spu_type — per the doc's GetProductInfo field list.
+const DIRECT_TOPUP_SPU_TYPE = 5;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -53,7 +56,10 @@ async function attemptWgCardsFulfillment({ orderId, item, currency = 'USD', retr
   }
 
   const skuRow = await db.queryOne(
-    'SELECT wgcards_sku_id, is_custom_value FROM product_skus WHERE sku_id = ?',
+    `SELECT ps.wgcards_sku_id, ps.is_custom_value, p.spu_type
+       FROM product_skus ps
+       JOIN products p ON p.product_id = ps.product_id
+      WHERE ps.sku_id = ?`,
     [item.skuId]
   );
   if (!skuRow || !skuRow.wgcards_sku_id) {
@@ -63,6 +69,13 @@ async function attemptWgCardsFulfillment({ orderId, item, currency = 'USD', retr
     // Checkout doesn't yet capture a customer-chosen face value within a
     // custom-value/top-up range — safer to punt to support than guess one.
     return { success: false, reason: 'custom_value_not_supported_yet' };
+  }
+  if (skuRow.spu_type === DIRECT_TOPUP_SPU_TYPE) {
+    // Confirmed live: WgCards rejects /api/placeOrder for a spuType:5 item
+    // with "no direct top-up parameter info" — it needs the separate
+    // getDirectParam -> apiTopUpParamCheck -> placeDirectOrder flow (Flow F,
+    // not yet built). Fail fast instead of burning two pointless retries.
+    return { success: false, reason: 'requires_direct_topup_flow' };
   }
 
   // Flow D: live stock check before ordering. Best-effort — if this call

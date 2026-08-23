@@ -176,9 +176,26 @@ class WgCardsService {
       await supplierConfigRepo.recordFailure(SUPPLIER);
       throw new SupplierAuthError(`WgCards ${endpoint}: still 401 after forced token refresh`);
     }
-    if (res.status !== 200 || !parsed || parsed.code !== 200) {
+    if (res.status !== 200) {
+      // Transport-level problem (proxy/gateway error, unexpected HTTP status)
+      // — a real signal something's wrong with the integration itself.
       await supplierConfigRepo.recordFailure(SUPPLIER);
-      throw new Error(`WgCards ${endpoint} failed: ${parsed?.msg || res.status}`);
+      throw new Error(`WgCards ${endpoint} failed: HTTP ${res.status}`);
+    }
+    if (!parsed) {
+      // Got a 200 but couldn't decrypt/parse it at all — also a genuine
+      // integration-health signal (wrong key, corrupted response, etc).
+      await supplierConfigRepo.recordFailure(SUPPLIER);
+      throw new Error(`WgCards ${endpoint} failed: could not decrypt/parse response`);
+    }
+    if (parsed.code !== 200) {
+      // A coherent, well-formed rejection FROM WgCards (e.g. placeOrder's
+      // "no direct top-up parameter info" for a spuType:5 SKU sent through
+      // the wrong endpoint) — this is a business outcome about THIS
+      // request, not evidence the integration itself is unhealthy. Do NOT
+      // trip the circuit breaker on it, and let callers distinguish it
+      // from a real connectivity failure via SupplierBusinessError.
+      throw new SupplierBusinessError(parsed.msg || `WgCards ${endpoint} rejected (code ${parsed.code})`, parsed.code);
     }
 
     await supplierConfigRepo.recordSuccess(SUPPLIER);

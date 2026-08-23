@@ -134,6 +134,28 @@ describe('WgCardsService', () => {
     expect(supplierConfigRepo.recordFailure).toHaveBeenCalledWith('wgcards');
   });
 
+  test('a genuine transport-level failure (non-200 HTTP status) DOES trip the circuit breaker', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({
+      ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    });
+    axios.post.mockResolvedValueOnce({ status: 502, data: '' });
+
+    await expect(wgcardsService.getAccount()).rejects.toThrow(/HTTP 502/);
+    expect(supplierConfigRepo.recordFailure).toHaveBeenCalledWith('wgcards');
+  });
+
+  test('a well-formed business rejection (outer code !== 200, real HTTP 200) does NOT trip the circuit breaker', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({
+      ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    });
+    axios.post.mockResolvedValueOnce(
+      encryptedAxiosResponse(200, { appId: APP_ID, code: 400, msg: 'invalid userId' })
+    );
+
+    await expect(wgcardsService.getAccount()).rejects.toMatchObject({ code: 'supplier_business_rejection' });
+    expect(supplierConfigRepo.recordFailure).not.toHaveBeenCalled();
+  });
+
   test('getStock rejects an empty/missing skuIds array without making a network call', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...BASE_CFG });
     await expect(wgcardsService.getStock([])).rejects.toThrow(/non-empty array/);
@@ -185,6 +207,18 @@ describe('WgCardsService', () => {
       await expect(
         wgcardsService.placeOrder({ skuId: 'sku-1', buyNum: 1, serviceOrder: 'svc-2' })
       ).rejects.toMatchObject({ code: 'supplier_business_rejection', message: 'productOutOfStock' });
+    });
+
+    test('a FLAT rejection (outer code !== 200, no nested data — the real shape WgCards sends for a spuType:5 SKU through the wrong endpoint) also throws SupplierBusinessError and does NOT trip the circuit breaker', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, { appId: APP_ID, code: 422, msg: 'no direct top-up parameter info' })
+      );
+
+      await expect(
+        wgcardsService.placeOrder({ skuId: 'sku-1', buyNum: 1, serviceOrder: 'svc-flat' })
+      ).rejects.toMatchObject({ code: 'supplier_business_rejection', wgcardsCode: 422, message: 'no direct top-up parameter info' });
+      expect(supplierConfigRepo.recordFailure).not.toHaveBeenCalled();
     });
 
     test('faceValue is included for custom-value SKUs', async () => {
