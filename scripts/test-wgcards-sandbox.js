@@ -254,6 +254,35 @@ async function run() {
     results.push(['getStock', 'SKIPPED']);
   }
 
+  // 5. getItem (paginated, single-item lookup) — getAllItem's skuList entries
+  //    came back with no skuPrice/cost field, which is odd since cost_price
+  //    is what Flow B1 catalog sync needs. Checking whether the paginated
+  //    single-item endpoint includes it where getAllItem doesn't.
+  if (token) {
+    try {
+      const itemId = process.env.WGCARDS_TEST_ITEM_ID || '11816225288'; // real item id from a getAllItem run
+      const { status, parsed } = await call(
+        '/api/getItem',
+        { appId: CONFIG.appId, currencyCode: 'CNY', language: 'en', itemId, itemName: '', current: 1, size: 10 },
+        token
+      );
+      console.log(`\n[5] POST /api/getItem (itemId=${itemId})`);
+      console.log('  HTTP status:', status);
+      console.log('  Raw parsed response:', JSON.stringify(parsed, null, 2).slice(0, 3000));
+      const skuList = parsed?.data?.records?.[0]?.skuList || parsed?.data?.records?.[0]?.skus;
+      const hasPricing = Array.isArray(skuList) && skuList.some((s) => s.skuPrice !== undefined);
+      console.log('  Any SKU has a skuPrice field?', hasPricing);
+      results.push(['getItem', parsed && parsed.code === 200 ? 'PASS' : 'FAIL - unexpected response']);
+    } catch (err) {
+      console.log('\n[5] POST /api/getItem');
+      console.log('  ERROR:', err.message);
+      results.push(['getItem', `FAIL - ${err.message}`]);
+    }
+  } else {
+    console.log('\n[5] POST /api/getItem - SKIPPED (no token from step 1)');
+    results.push(['getItem', 'SKIPPED']);
+  }
+
   // Summary
   console.log('\n' + '='.repeat(70));
   console.log('SUMMARY');
