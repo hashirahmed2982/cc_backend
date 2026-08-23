@@ -177,11 +177,31 @@ class WgCardsService {
     return this._authedCall('/api/getAccount', { userId: cfg.app_id });
   }
 
-  /** getCatalog() — Flow B1: full catalog pull, one call. */
+  /**
+   * getAllItem — lightweight catalog listing. Confirmed live against the
+   * sandbox: NOT the same shape as the doc's example (that example is
+   * actually getItem's) — this returns a flat array under `data` with
+   * itemId/itemName/skuList, and critically has NO pricing (no skuPrice/
+   * minPrice/maxPrice) and no image/description. Useful for a cheap
+   * "what item/sku ids currently exist" pass, not for pricing.
+   */
   async getAllItem({ currencyCode = 'USD', language = 'en', itemId = '', itemName = '' } = {}) {
     const cfg = await this._config();
     return this._authedCall('/api/getAllItem', {
       appId: cfg.app_id, currencyCode, language, itemId, itemName,
+    });
+  }
+
+  /**
+   * getCatalog() — GetProductInfo (paginated). This is the one with real
+   * pricing (skus[].skuPrice/minPrice/maxPrice), spuImage, description,
+   * howExchange. Flow B1 catalog sync pages through this with itemId=''
+   * rather than relying on getAllItem for cost data.
+   */
+  async getItem({ itemId = '', itemName = '', currencyCode = 'USD', language = 'en', current = 1, size = 50 } = {}) {
+    const cfg = await this._config();
+    return this._authedCall('/api/getItem', {
+      appId: cfg.app_id, currencyCode, language, itemId, itemName, current, size,
     });
   }
 

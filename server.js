@@ -19,6 +19,9 @@ db.getConnection()
       logger.info(`✓ API Version: ${process.env.API_VERSION}`);
     });
 
+    // Supplier integration cron jobs (catalog sync, stock sync, etc.)
+    require('./src/jobs').start();
+
     // Graceful shutdown
     process.on('SIGTERM', () => {
       logger.info('SIGTERM signal received: closing HTTP server');
