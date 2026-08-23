@@ -26,6 +26,22 @@ class SupplierAuthError extends Error {
   }
 }
 
+/**
+ * A WgCards call that got a real HTTP response and passed the outer
+ * envelope check (code 200) but was rejected at the business level — e.g.
+ * placeOrder's nested `data.code` !== 200 (out of stock, insufficient
+ * balance, duplicate serviceOrder, etc). Never retried — Section 6 of the
+ * doc: "Business rejection ... No [auto-retry] ... Immediate pendingItems".
+ */
+class SupplierBusinessError extends Error {
+  constructor(message, wgcardsCode) {
+    super(message);
+    this.name = 'SupplierBusinessError';
+    this.code = 'supplier_business_rejection';
+    this.wgcardsCode = wgcardsCode;
+  }
+}
+
 class WgCardsService {
   /** Loads (and caches for the life of this instance) the decrypted supplier_config row. */
   async _config() {
@@ -221,22 +237,43 @@ class WgCardsService {
     });
   }
 
-  // ── Stubs — filled in during later phases, kept here so the adapter's
-  //    shape matches the doc's SupplierAdapter interface end to end. ──────
-
-  /** placeOrder({ productId, idempotencyKey, fields, qty }) — Phase 4 (Flow D). */
-  async placeOrder(/* { productId, idempotencyKey, fields, qty } */) {
-    throw new Error('WgCardsService.placeOrder: not implemented yet (Phase 4)');
+  /**
+   * placeOrder — Flow D. NOTE the doc's response is double-nested:
+   * { code, data: { code, data: <orderId string>, message }, msg }.
+   * _authedCall already validated the OUTER code (gateway-level) and
+   * returns the inner { code, data, message } object as `result` — that
+   * inner code is the actual business result (out of stock, insufficient
+   * balance, duplicate serviceOrder, etc), checked here.
+   *
+   * faceValue is only sent for custom-value SKUs (doc: "required, when
+   * purchasing a custom par sku") — omit it for fixed-denomination SKUs.
+   */
+  async placeOrder({ skuId, buyNum, faceValue, currency = 'USD', serviceOrder }) {
+    const cfg = await this._config();
+    const detail = faceValue !== undefined ? { skuId, faceValue, buyNum } : { skuId, buyNum };
+    const result = await this._authedCall('/api/placeOrder', {
+      userId: cfg.app_id,
+      accountId: cfg.account_id,
+      currency,
+      serviceOrder,
+      detailVos: [detail],
+    });
+    if (!result || result.code !== 200 || !result.data) {
+      throw new SupplierBusinessError(result?.message || 'placeOrder rejected', result?.code);
+    }
+    return { wgcardsOrderId: result.data, message: result.message };
   }
 
-  /** getOrderStatus(idempotencyKeyOrOrderId) — Phase 5 (Flow E, getOrderInfoAndDetail). */
-  async getOrderStatus(/* orderId */) {
-    throw new Error('WgCardsService.getOrderStatus: not implemented yet (Phase 5)');
+  /** getOrderInfoAndDetail — Flow E: order status + line-level delivery detail. */
+  async getOrderInfoAndDetail({ orderId, current = 1, size = 200 }) {
+    const cfg = await this._config();
+    return this._authedCall('/api/getOrderInfoAndDetail', { userId: cfg.app_id, orderId, current, size });
   }
 
-  /** getCode(orderIdOrReference) — Phase 5 (Flow E, getBuyCard). */
-  async getCode(/* orderId */) {
-    throw new Error('WgCardsService.getCode: not implemented yet (Phase 5)');
+  /** getBuyCard — Flow E: fetch delivered card/pin/sn once deliveryStatus is 2 or 3. */
+  async getBuyCard({ orderId, current = 1, size = 200 }) {
+    const cfg = await this._config();
+    return this._authedCall('/api/getBuyCard', { userId: cfg.app_id, orderId, current, size });
   }
 
   /** Direct top-up flow (getDirectParam/apiTopUpParamCheck/placeDirectOrder) — Phase 9 / Flow F. */
@@ -247,3 +284,4 @@ class WgCardsService {
 
 module.exports = new WgCardsService();
 module.exports.SupplierAuthError = SupplierAuthError;
+module.exports.SupplierBusinessError = SupplierBusinessError;

@@ -7,7 +7,7 @@ jest.mock('../supplierApiLog.service', () => ({ log: jest.fn().mockResolvedValue
 
 const axios = require('axios');
 const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
-const { encryptMsg } = require('../../utils/wgcardsCrypto');
+const { encryptMsg, decryptMsg } = require('../../utils/wgcardsCrypto');
 const wgcardsService = require('../wgcards.service');
 
 const APP_ID = 'testAppId1234567'; // 16 chars — valid AES-128 key length, mirrors the sandbox appId
@@ -22,6 +22,12 @@ const BASE_CFG = {
 
 function encryptedAxiosResponse(status, payloadObj) {
   return { status, data: encryptMsg(APP_ID, payloadObj) };
+}
+
+/** Decrypt what we actually sent on a given axios.post call, for asserting request shape. */
+function sentPayloadFor(callIndex) {
+  const sentBody = axios.post.mock.calls[callIndex][1]; // the object passed to axios.post(url, body, opts)
+  return JSON.parse(decryptMsg(APP_ID, sentBody.msg));
 }
 
 describe('WgCardsService', () => {
@@ -135,10 +141,88 @@ describe('WgCardsService', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  test('placeOrder/getOrderStatus/getCode/placeDirectOrder are explicit not-implemented stubs', async () => {
-    await expect(wgcardsService.placeOrder({})).rejects.toThrow(/Phase 4/);
-    await expect(wgcardsService.getOrderStatus('x')).rejects.toThrow(/Phase 5/);
-    await expect(wgcardsService.getCode('x')).rejects.toThrow(/Phase 5/);
+  test('placeDirectOrder is still an explicit not-implemented stub (Flow F, Phase 9)', async () => {
     await expect(wgcardsService.placeDirectOrder({})).rejects.toThrow(/Flow F/);
+  });
+
+  describe('placeOrder', () => {
+    const cachedCfg = {
+      ...BASE_CFG,
+      token: 'cached-token',
+      token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    };
+
+    test('success: returns the nested wgcardsOrderId', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, {
+          appId: APP_ID, code: 200,
+          data: { code: 200, data: '2025112071040010', message: 'success' },
+          msg: 'success',
+        })
+      );
+
+      const result = await wgcardsService.placeOrder({
+        skuId: 'sku-1', buyNum: 2, currency: 'USD', serviceOrder: 'svc-1',
+      });
+
+      expect(result).toEqual({ wgcardsOrderId: '2025112071040010', message: 'success' });
+      const sentPayload = sentPayloadFor(0);
+      expect(sentPayload.detailVos).toEqual([{ skuId: 'sku-1', buyNum: 2 }]); // no faceValue for fixed-value SKUs
+      expect(sentPayload.serviceOrder).toBe('svc-1');
+    });
+
+    test('a business rejection (nested code !== 200) throws SupplierBusinessError, not a generic Error', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, {
+          appId: APP_ID, code: 200,
+          data: { code: 4001, data: null, message: 'productOutOfStock' },
+          msg: 'success',
+        })
+      );
+
+      await expect(
+        wgcardsService.placeOrder({ skuId: 'sku-1', buyNum: 1, serviceOrder: 'svc-2' })
+      ).rejects.toMatchObject({ code: 'supplier_business_rejection', message: 'productOutOfStock' });
+    });
+
+    test('faceValue is included for custom-value SKUs', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, {
+          appId: APP_ID, code: 200,
+          data: { code: 200, data: 'order-id', message: 'success' },
+          msg: 'success',
+        })
+      );
+
+      await wgcardsService.placeOrder({ skuId: 'sku-2', buyNum: 1, faceValue: 25.5, serviceOrder: 'svc-3' });
+
+      expect(sentPayloadFor(0).detailVos).toEqual([{ skuId: 'sku-2', faceValue: 25.5, buyNum: 1 }]);
+    });
+  });
+
+  test('getOrderInfoAndDetail and getBuyCard pass through the decrypted response', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({
+      ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    });
+    axios.post
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, {
+        appId: APP_ID, code: 200,
+        data: { firstTo: { orderId: '123', deliveryStatus: 3 }, secondTos: [] },
+        msg: 'success',
+      }))
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, {
+        appId: APP_ID, code: 200,
+        data: { records: [{ skuId: 's1', card: 'CODE', pinCode: 'PIN', snCode: 'SN' }] },
+        msg: 'success',
+      }));
+
+    const orderInfo = await wgcardsService.getOrderInfoAndDetail({ orderId: '123' });
+    const buyCard = await wgcardsService.getBuyCard({ orderId: '123' });
+
+    expect(orderInfo.firstTo.deliveryStatus).toBe(3);
+    expect(buyCard.records[0].card).toBe('CODE');
   });
 });

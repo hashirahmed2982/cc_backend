@@ -306,13 +306,17 @@ CREATE TABLE IF NOT EXISTS order_details (
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     delivered_qty INT NOT NULL DEFAULT 0,
     delivery_status ENUM('pending', 'partial', 'completed', 'failed') NOT NULL DEFAULT 'pending',
+    wgcards_service_order VARCHAR(100) NULL COMMENT 'Our idempotency key sent as serviceOrder — one per placeOrder attempt',
+    wgcards_order_id VARCHAR(100) NULL COMMENT 'Supplier order id once placeOrder succeeds — presence means "already placed, do not re-order"',
+    pending_reason VARCHAR(50) NULL COMMENT 'insufficient_inventory | supplier_rejected | supplier_timeout | supplier_auth_failure | awaiting_supplier_delivery | custom_value_not_supported_yet | supplier_api_pending',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(product_id),
     FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id),
     INDEX idx_order_id (order_id),
     INDEX idx_product_id (product_id),
-    INDEX idx_sku_id (sku_id)
+    INDEX idx_sku_id (sku_id),
+    INDEX idx_wgcards_order_id (wgcards_order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================

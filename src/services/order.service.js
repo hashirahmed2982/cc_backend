@@ -3,31 +3,12 @@
 
 const db = require('../config/database');
 const logger = require('../utils/logger');
-const crypto = require('crypto');
 const ZipEncrypted = require('archiver-zip-encrypted');
 const stream = require('stream');
 const emailService = require('./email.service');
 const auditService = require('../services/audit.service');
-
-
-// ─── Decrypt codes (same key as product_service) ─────────────────────────────
-const RAW_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-this!!';
-const ENCRYPTION_KEY = Buffer.from(RAW_KEY.padEnd(32, '0').slice(0, 32));
-
-function decrypt(text) {
-  try {
-    const [ivHex, encHex] = text.split(':');
-    const decipher = crypto.createDecipheriv(
-      'aes-256-cbc',
-      ENCRYPTION_KEY,
-      Buffer.from(ivHex, 'hex')
-    );
-    return Buffer.concat([
-      decipher.update(Buffer.from(encHex, 'hex')),
-      decipher.final(),
-    ]).toString();
-  } catch { return text; }
-}
+const wgcardsFulfillment = require('./wgcardsFulfillment');
+const { decrypt } = require('../utils/dataCrypto');
 
 // ─── Generate order number ────────────────────────────────────────────────────
 function generateOrderNumber() {
@@ -204,7 +185,7 @@ class OrderService {
       await conn.commit();
 
       // ── 7. Fulfill codes (outside transaction for performance) ───────────
-      const fulfillResult = await this._fulfillOrder(orderId, resolvedItems, userId);
+      const fulfillResult = await this._fulfillOrder(orderId, resolvedItems, userId, wallet.currency);
 
       // Sync order_details delivery_status from actual delivered_qty
       await db.query(
@@ -276,12 +257,56 @@ class OrderService {
   //  INTERNAL: Allocate digital codes from inventory
   // ══════════════════════════════════════════════════════════════════════════
 
-  async _fulfillOrder(orderId, resolvedItems, userId) {
+  async _fulfillOrder(orderId, resolvedItems, userId, currency = 'USD') {
     const fulfilledItems = [];
     const pendingItems = [];
 
     for (const item of resolvedItems) {
+      if (item.source === 'wgcards') {
+        // Flow D, WgCards branch (Phase 4). Deliberately NOT checking local
+        // digital_codes first here — unlike the doc's fully-generic hybrid
+        // model, this codebase ties `source` to one exclusive fulfillment
+        // path per product: a wgcards-sourced product has no local codes to
+        // begin with (nobody manually uploads codes for API-fulfilled
+        // products), so there's nothing to check.
+        const result = await wgcardsFulfillment.attemptWgCardsFulfillment({
+          orderId,
+          item: { skuId: item.skuId, quantity: item.quantity },
+          currency,
+        });
+
+        if (result.success) {
+          // Order placed (or already was) — Flow E's poller (Phase 5, not
+          // yet built) is what actually delivers the code and marks this
+          // delivered. Until then it correctly sits as pending/processing.
+          pendingItems.push({
+            productId: item.productId,
+            productName: item.productName,
+            skuId: item.skuId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            delivered: 0,
+            pending: item.quantity,
+            reason: 'awaiting_supplier_delivery',
+            wgcardsOrderId: result.wgcardsOrderId,
+          });
+        } else {
+          pendingItems.push({
+            productId: item.productId,
+            productName: item.productName,
+            skuId: item.skuId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            delivered: 0,
+            pending: item.quantity,
+            reason: result.reason,
+          });
+        }
+        continue;
+      }
+
       if (item.source !== 'internal') {
+        // gift2games (deferred) or any other not-yet-implemented source.
         pendingItems.push({ ...item, reason: 'supplier_api_pending', codes: [] });
         continue;
       }
@@ -388,9 +413,7 @@ class OrderService {
       }));
 
       // Fulfill remaining
-      // const fulfillResult = await this._fulfillOrder(orderId, remainingItems, order.client_user_id);
-      // Fulfill whatever stock is available
-      const fulfillResult = await this._fulfillOrder(orderId, remainingItems, order.client_user_id);
+      const fulfillResult = await this._fulfillOrder(orderId, remainingItems, order.client_user_id, order.currency);
 
       // ── Sync delivery_status on ALL order_details from actual delivered_qty ──
       await db.query(
