@@ -313,9 +313,69 @@ class WgCardsService {
     return this._authedCall('/api/getBuyCard', { userId: cfg.app_id, orderId, current, size });
   }
 
-  /** Direct top-up flow (getDirectParam/apiTopUpParamCheck/placeDirectOrder) — Phase 9 / Flow F. */
-  async placeDirectOrder(/* { skuId, targetAccount, webhookUrl } */) {
-    throw new Error('WgCardsService.placeDirectOrder: not implemented yet (Flow F)');
+  /**
+   * getDirectParam — Flow F step 1: fetch the dynamic parameter list a
+   * given Direct Top-Up SKU needs (e.g. player ID, phone number, zone) so
+   * the client can be prompted for the right fields before placing an
+   * order. Double-nested like placeOrder — inner `data.code` is the real
+   * result, `data.paramInfos` is the field list.
+   */
+  async getDirectParam({ skuId }) {
+    const cfg = await this._config();
+    const result = await this._authedCall('/api/getDirectParam', { userId: cfg.app_id, skuId });
+    if (!result || result.code !== 200) {
+      throw new SupplierBusinessError(result?.msg || 'getDirectParam rejected', result?.code);
+    }
+    return result.paramInfos || [];
+  }
+
+  /**
+   * apiTopUpParamCheck — Flow F step 2: validate the attributeValues the
+   * client entered BEFORE spending a placeDirectOrder attempt. The doc's
+   * own worked example is a REJECTION ("sku不属于直充类型" — "sku is not a
+   * direct top-up type") — so `passed: false` here is an expected,
+   * first-class result, not a thrown error; callers check `.passed`.
+   * NOTE unlike every other topup call this response is single-nested —
+   * { code, data: { passed, reason }, msg } — _authedCall already returns
+   * `data`, so there's nothing further to unwrap here.
+   */
+  async apiTopUpParamCheck({ skuId, attributeValues }) {
+    const cfg = await this._config();
+    return this._authedCall('/api/apiTopUpParamCheck', {
+      userId: cfg.app_id,
+      accountId: cfg.account_id,
+      skuId,
+      attributeValues,
+    });
+  }
+
+  /**
+   * placeDirectOrder — Flow F step 3. Double-nested response, identical
+   * shape to placeOrder: { code, data: { code, data: <orderId>, message }, msg }.
+   * `serviceOrder` MUST be unique — the doc explicitly warns WgCards
+   * rejects a repeat outright — so, same convention as placeOrder, this is
+   * also our idempotency key across retries within one fulfillment attempt.
+   * `webhook` is the callback URL WgCards POSTs the result to (Annex III) —
+   * up to 5 attempts within 30 minutes, and the handler must literally
+   * respond the string 'success' or they keep retrying.
+   */
+  async placeDirectOrder({ skuId, faceValue, currency = 'USD', serviceOrder, webhook, attributeValues }) {
+    const cfg = await this._config();
+    const payload = {
+      userId: cfg.app_id,
+      accountId: cfg.account_id,
+      currency,
+      serviceOrder,
+      skuId,
+      webhook,
+      attributeValues,
+    };
+    if (faceValue !== undefined) payload.faceValue = faceValue;
+    const result = await this._authedCall('/api/placeDirectOrder', payload);
+    if (!result || result.code !== 200 || !result.data) {
+      throw new SupplierBusinessError(result?.message || 'placeDirectOrder rejected', result?.code);
+    }
+    return { wgcardsOrderId: result.data, message: result.message };
   }
 }
 

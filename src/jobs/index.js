@@ -11,6 +11,7 @@ const stockSync = require('./stockSync');
 const orderPoller = require('./orderPoller');
 const healthCheck = require('./healthCheck');
 const balanceMonitor = require('./balanceMonitor');
+const wgcardsTopupReconciler = require('./wgcardsTopupReconciler');
 
 function guarded(name, fn) {
   return async () => {
@@ -48,6 +49,13 @@ function start() {
   // Job #6 — Account Balance Monitor, every 30 min (Flow G).
   cron.schedule('*/30 * * * *', guarded('balanceMonitor', () => balanceMonitor.run()));
   logger.info('[cron] registered: balanceMonitor (every 30 min)');
+
+  // Job #5 — Top-up Reconciler, every 10 min (Flow F fallback). The job
+  // itself only acts on rows past the 35-min mark (RECONCILE_AFTER_MINUTES),
+  // so running the cron every 10 min and letting it skip everything younger
+  // is correct and matches the doc's own "every 10 min from the 35-min mark".
+  cron.schedule('*/10 * * * *', guarded('wgcardsTopupReconciler', () => wgcardsTopupReconciler.run()));
+  logger.info('[cron] registered: wgcardsTopupReconciler (every 10 min, 35-min fallback window)');
 }
 
 module.exports = { start };

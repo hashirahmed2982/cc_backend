@@ -132,6 +132,44 @@ const templates = {
     </div>`, vars)
   }),
 
+  // NOTE: these are for a WgCards "Direct Top-Up" PRODUCT order (Flow F —
+  // recharging a game/phone account via WgCards) — distinct from the
+  // topUpReceived/topUpSuccessful/topUpCanceled templates above, which are
+  // about funding the client's own CardCove wallet balance.
+  wgcardsDirectTopupConfirmed: (vars) => ({
+    subject: fill('Top-Up Successful – {Order_Reference}', vars),
+    html: fill(`<div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
+      <p>Dear {Client_Name},</p>
+      <p>Your top-up order has been successfully delivered by the supplier.</p>
+      <h3>Order Details</h3>
+      <ul>
+        <li>Reference: {Order_Reference}</li>
+        <li>Product: {Product_Name}</li>
+        <li>Account: {Target_Account}</li>
+        <li>Amount: {Amount} {Currency}</li>
+      </ul>
+      <p>Best regards,<br>CardCove FZC</p>
+    </div>`, vars)
+  }),
+
+  wgcardsDirectTopupFailed: (vars) => ({
+    subject: fill('Top-Up Failed – {Order_Reference}', vars),
+    html: fill(`<div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
+      <p>Dear {Client_Name},</p>
+      <p>We're sorry — your top-up order could not be completed, and the amount has been refunded to your wallet.</p>
+      <h3>Order Details</h3>
+      <ul>
+        <li>Reference: {Order_Reference}</li>
+        <li>Product: {Product_Name}</li>
+        <li>Account: {Target_Account}</li>
+        <li>Amount Refunded: {Amount} {Currency}</li>
+        <li>Reason: {Reason}</li>
+      </ul>
+      <p>Please contact our support team if you have any questions.</p>
+      <p>Best regards,<br>CardCove FZC</p>
+    </div>`, vars)
+  }),
+
   walletBalanceSettled: (vars) => ({
     subject: 'Wallet Balance Settlement Confirmation',
     html: fill(`<div style="font-family: sans-serif; padding: 20px; line-height: 1.6;">

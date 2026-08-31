@@ -16,6 +16,8 @@ const orderRoutes = require('./routes/order.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const clientRoutes = require('./routes/client.routes');
 const adminRoutes = require('./routes/admin.routes');
+const topupRoutes = require('./routes/topup.routes');
+const wgcardsTopupWebhook = require('./routes/webhooks/wgcardsTopup');
 
 // const reportRoutes = require('./routes/report.routes');
 
@@ -141,8 +143,14 @@ app.use(`${API_PREFIX}/orders`, orderRoutes);
 app.use(`${API_PREFIX}/wallet`, walletRoutes);
 app.use(`${API_PREFIX}/client`, clientRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
+app.use(`${API_PREFIX}/topup`, topupRoutes);
 
 // app.use(`${API_PREFIX}/reports`, reportRoutes);
+
+// WgCards Direct Top-Up webhook (Annex III) — deliberately outside
+// API_PREFIX and NOT behind auth middleware; WgCards calls this directly
+// with no CardCove session.
+app.use('/webhooks/wgcards/topup', wgcardsTopupWebhook);
 
 // 404 handler
 app.use((req, res) => {

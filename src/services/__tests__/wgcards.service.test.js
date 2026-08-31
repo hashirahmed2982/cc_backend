@@ -163,8 +163,110 @@ describe('WgCardsService', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  test('placeDirectOrder is still an explicit not-implemented stub (Flow F, Phase 9)', async () => {
-    await expect(wgcardsService.placeDirectOrder({})).rejects.toThrow(/Flow F/);
+  describe('getDirectParam', () => {
+    const cachedCfg = { ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000) };
+
+    test('returns the paramInfos list, unwrapping the double-nested response', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, {
+          appId: APP_ID, code: 200,
+          data: { code: 200, msg: 'success', paramInfos: [{ name: 'playerId', type: 'input', label: 'Player ID', placeholder: '', values: [] }] },
+          msg: 'success',
+        })
+      );
+
+      const result = await wgcardsService.getDirectParam({ skuId: 'sku-topup-1' });
+
+      expect(result).toEqual([{ name: 'playerId', type: 'input', label: 'Player ID', placeholder: '', values: [] }]);
+      expect(sentPayloadFor(0)).toMatchObject({ userId: APP_ID, skuId: 'sku-topup-1' });
+    });
+
+    test('a nested code !== 200 throws SupplierBusinessError', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, { appId: APP_ID, code: 200, data: { code: 4004, msg: 'sku not found' }, msg: 'success' })
+      );
+
+      await expect(wgcardsService.getDirectParam({ skuId: 'bad-sku' })).rejects.toMatchObject({ code: 'supplier_business_rejection' });
+    });
+  });
+
+  describe('apiTopUpParamCheck', () => {
+    const cachedCfg = { ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000) };
+
+    test('returns { passed, reason } as-is — single-nested, unlike every other topup call', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, { appId: APP_ID, code: 200, data: { passed: false, reason: 'sku不属于直充类型' }, msg: 'success' })
+      );
+
+      const result = await wgcardsService.apiTopUpParamCheck({
+        skuId: 'sku-1', attributeValues: [{ name: 'player ID', value: '1234', label: 'Player ID' }],
+      });
+
+      expect(result).toEqual({ passed: false, reason: 'sku不属于直充类型' });
+      expect(sentPayloadFor(0)).toMatchObject({
+        userId: APP_ID, accountId: cachedCfg.account_id, skuId: 'sku-1',
+        attributeValues: [{ name: 'player ID', value: '1234', label: 'Player ID' }],
+      });
+    });
+  });
+
+  describe('placeDirectOrder', () => {
+    const cachedCfg = { ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000) };
+    const attributeValues = [{ name: 'player ID', value: '1234', label: 'Player ID' }];
+
+    test('success: returns the nested wgcardsOrderId, same double-nested shape as placeOrder', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, {
+          appId: APP_ID, code: 200,
+          data: { code: 200, data: '2024011148886234', message: 'success' },
+          msg: 'success',
+        })
+      );
+
+      const result = await wgcardsService.placeDirectOrder({
+        skuId: 'sku-topup-1', currency: 'EUR', serviceOrder: 'svc-direct-1', webhook: 'https://example.com/hook', attributeValues,
+      });
+
+      expect(result).toEqual({ wgcardsOrderId: '2024011148886234', message: 'success' });
+      const sent = sentPayloadFor(0);
+      expect(sent).toMatchObject({
+        userId: APP_ID, accountId: cachedCfg.account_id, currency: 'EUR',
+        serviceOrder: 'svc-direct-1', skuId: 'sku-topup-1', webhook: 'https://example.com/hook', attributeValues,
+      });
+      expect(sent).not.toHaveProperty('faceValue'); // omitted for fixed-denomination SKUs
+    });
+
+    test('faceValue is included when provided (custom-value top-up SKU)', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, { appId: APP_ID, code: 200, data: { code: 200, data: 'order-2', message: 'success' }, msg: 'success' })
+      );
+
+      await wgcardsService.placeDirectOrder({
+        skuId: 'sku-topup-2', faceValue: 500, currency: 'EUR', serviceOrder: 'svc-direct-2', webhook: '', attributeValues,
+      });
+
+      expect(sentPayloadFor(0).faceValue).toBe(500);
+    });
+
+    test('a business rejection (nested code !== 200) throws SupplierBusinessError', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...cachedCfg });
+      axios.post.mockResolvedValueOnce(
+        encryptedAxiosResponse(200, {
+          appId: APP_ID, code: 200,
+          data: { code: 4010, data: null, message: 'duplicate serviceOrder' },
+          msg: 'success',
+        })
+      );
+
+      await expect(
+        wgcardsService.placeDirectOrder({ skuId: 'sku-topup-1', serviceOrder: 'svc-dup', webhook: '', attributeValues })
+      ).rejects.toMatchObject({ code: 'supplier_business_rejection', message: 'duplicate serviceOrder' });
+    });
   });
 
   describe('placeOrder', () => {
