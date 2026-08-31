@@ -8,8 +8,9 @@ const db = require('../../config/database');
 const wgcardsService = require('../../services/wgcards.service');
 const orderService = require('../../services/order.service');
 const {
-  run, DELIVERY_STATUS,
+  run, DELIVERY_STATUS, FALLBACK_MAX_PAGES,
   pickIntervalMinutes, shouldPollNow, newRecordsSince, pendingReasonForAge,
+  matchesOrderId, findDeliveryStatusViaList,
 } = require('../orderPoller');
 
 describe('orderPoller pure helpers', () => {
@@ -62,6 +63,61 @@ describe('orderPoller pure helpers', () => {
     test('<24h -> normal awaiting reason', () => expect(pendingReasonForAge(10)).toBe('awaiting_supplier_delivery'));
     test('>=24h -> delayed', () => expect(pendingReasonForAge(30)).toBe('delayed'));
     test('>=72h -> delayed_needs_admin_decision', () => expect(pendingReasonForAge(100)).toBe('delayed_needs_admin_decision'));
+  });
+
+  describe('matchesOrderId', () => {
+    test('matches on string equality even across number/string types', () => {
+      expect(matchesOrderId({ orderId: '123' }, '123')).toBe(true);
+      expect(matchesOrderId({ orderId: 123 }, '123')).toBe(true);
+    });
+    test('does not match a different id', () => {
+      expect(matchesOrderId({ orderId: '123' }, '456')).toBe(false);
+    });
+  });
+});
+
+describe('findDeliveryStatusViaList (getOrderInfoAndDetail fallback)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('finds a match on the first page and stops immediately (no further pages fetched)', async () => {
+    wgcardsService.getOrderInfo.mockResolvedValueOnce({
+      current: 1, pages: 5,
+      records: [{ orderId: 'WG-1', deliveryStatus: 3 }, { orderId: 'WG-2', deliveryStatus: 1 }],
+    });
+
+    const result = await findDeliveryStatusViaList('WG-1');
+
+    expect(result).toEqual({ found: true, deliveryStatus: 3 });
+    expect(wgcardsService.getOrderInfo).toHaveBeenCalledTimes(1);
+  });
+
+  test('pages forward until it finds a match', async () => {
+    wgcardsService.getOrderInfo
+      .mockResolvedValueOnce({ current: 1, pages: 5, records: [{ orderId: 'other-1', deliveryStatus: 1 }] })
+      .mockResolvedValueOnce({ current: 2, pages: 5, records: [{ orderId: 'WG-1', deliveryStatus: 2 }] });
+
+    const result = await findDeliveryStatusViaList('WG-1');
+
+    expect(result).toEqual({ found: true, deliveryStatus: 2 });
+    expect(wgcardsService.getOrderInfo).toHaveBeenCalledTimes(2);
+  });
+
+  test('gives up after FALLBACK_MAX_PAGES without finding a match', async () => {
+    wgcardsService.getOrderInfo.mockResolvedValue({ current: 1, pages: 999, records: [{ orderId: 'someone-elses-order' }] });
+
+    const result = await findDeliveryStatusViaList('WG-1');
+
+    expect(result).toEqual({ found: false });
+    expect(wgcardsService.getOrderInfo).toHaveBeenCalledTimes(FALLBACK_MAX_PAGES);
+  });
+
+  test('stops early once it runs past the last real page, without over-fetching', async () => {
+    wgcardsService.getOrderInfo.mockResolvedValueOnce({ current: 1, pages: 1, records: [{ orderId: 'someone-else' }] });
+
+    const result = await findDeliveryStatusViaList('WG-1');
+
+    expect(result).toEqual({ found: false });
+    expect(wgcardsService.getOrderInfo).toHaveBeenCalledTimes(1); // pages:1, so stop after page 1
   });
 });
 
@@ -156,5 +212,43 @@ describe('orderPoller.run', () => {
     db.query.mockResolvedValueOnce([]);
     const summary = await run();
     expect(summary).toMatchObject({ candidates: 0, polled: 0, delivered: 0, cancelled: 0 });
+  });
+
+  test('getOrderInfoAndDetail business rejection falls back to getOrderInfo list search, and still delivers on a match', async () => {
+    db.query
+      .mockResolvedValueOnce([{ ...baseRow }])                      // candidates
+      .mockResolvedValueOnce(undefined)                              // recalc UPDATE
+      .mockResolvedValueOnce([{ incompleteLines: 0 }])
+      .mockResolvedValueOnce(undefined)                              // orders UPDATE
+      .mockResolvedValueOnce([{ product_id: 11391, product_name: 'Airplane-chefs' }])
+      .mockResolvedValueOnce([]);
+    db.queryOne
+      .mockResolvedValueOnce({ order_number: 'ORD-1', currency: 'USD', client_user_id: 12, full_name: 'Test User', email: 'test@example.com' })
+      .mockResolvedValueOnce({ zip_password: 'zippw' });
+    db.transaction.mockImplementation(async (cb) => cb({ execute: jest.fn().mockResolvedValue([{}]) }));
+
+    const businessErr = new Error('bad request');
+    businessErr.code = 'supplier_business_rejection';
+    wgcardsService.getOrderInfoAndDetail.mockRejectedValueOnce(businessErr);
+    wgcardsService.getOrderInfo.mockResolvedValueOnce({
+      current: 1, pages: 1, records: [{ orderId: 'WG-1', deliveryStatus: DELIVERY_STATUS.FULL }],
+    });
+    wgcardsService.getBuyCard.mockResolvedValueOnce({ records: [{ skuId: '12182768136', card: 'CODE1' }] });
+
+    const summary = await run();
+
+    expect(wgcardsService.getOrderInfo).toHaveBeenCalledTimes(1);
+    expect(summary.delivered).toBe(1);
+    expect(summary.errors).toHaveLength(0);
+  });
+
+  test('a NON-business-rejection error (e.g. real network failure) does NOT trigger the getOrderInfo fallback', async () => {
+    db.query.mockResolvedValueOnce([{ ...baseRow }]).mockResolvedValueOnce(undefined);
+    wgcardsService.getOrderInfoAndDetail.mockRejectedValueOnce(new Error('ECONNABORTED'));
+
+    const summary = await run();
+
+    expect(wgcardsService.getOrderInfo).not.toHaveBeenCalled();
+    expect(summary.errors).toHaveLength(1);
   });
 });

@@ -69,6 +69,34 @@ function pendingReasonForAge(ageHours) {
   return 'awaiting_supplier_delivery';
 }
 
+/** Does this getOrderInfo record match the WgCards order we're looking for? */
+function matchesOrderId(record, wgcardsOrderId) {
+  return String(record.orderId) === String(wgcardsOrderId);
+}
+
+// getOrderInfoAndDetail currently rejects every payload variant we've tried
+// (reported to WgCards, unresolved as of this writing — see CHANGELOG/PR
+// notes). getOrderInfo (the list endpoint) works and includes deliveryStatus
+// per record, so it's the fallback — but it has no per-order filter, so the
+// search is bounded rather than exhaustive: this is a busy shared sandbox
+// (100+ pages), and an unbounded search would burn through rate limits
+// chasing an order that fell out of the recent window.
+const FALLBACK_MAX_PAGES = 15;
+const FALLBACK_PAGE_SIZE = 50;
+
+/** Search getOrderInfo's paginated list (newest first) for a record
+ * matching wgcardsOrderId, within FALLBACK_MAX_PAGES. */
+async function findDeliveryStatusViaList(wgcardsOrderId) {
+  for (let page = 1; page <= FALLBACK_MAX_PAGES; page++) {
+    const result = await wgcardsService.getOrderInfo({ current: page, size: FALLBACK_PAGE_SIZE });
+    const records = result?.records || [];
+    const match = records.find((r) => matchesOrderId(r, wgcardsOrderId));
+    if (match) return { found: true, deliveryStatus: match.deliveryStatus };
+    if (!records.length || page >= (result?.pages || 1)) break; // no more pages to check
+  }
+  return { found: false };
+}
+
 // ── DB writes ───────────────────────────────────────────────────────────
 
 async function markPolled(orderDetailId) {
@@ -168,10 +196,30 @@ async function run() {
     try {
       info = await wgcardsService.getOrderInfoAndDetail({ orderId: row.wgcards_order_id });
     } catch (err) {
-      logger.warn(`orderPoller: getOrderInfoAndDetail failed for order_detail ${row.order_detail_id} (wgcards order ${row.wgcards_order_id}):`, err.message);
-      summary.errors.push({ orderDetailId: row.order_detail_id, error: err.message });
-      await markPolled(row.order_detail_id); // still respect the tiered cadence even on failure
-      continue;
+      if (err.code === 'supplier_business_rejection') {
+        logger.warn(`orderPoller: getOrderInfoAndDetail rejected order_detail ${row.order_detail_id} (${err.message}) — falling back to getOrderInfo list search`);
+        let fallback;
+        try {
+          fallback = await findDeliveryStatusViaList(row.wgcards_order_id);
+        } catch (fallbackErr) {
+          logger.warn(`orderPoller: getOrderInfo fallback also failed for order_detail ${row.order_detail_id}:`, fallbackErr.message);
+          summary.errors.push({ orderDetailId: row.order_detail_id, error: fallbackErr.message });
+          await markPolled(row.order_detail_id);
+          continue;
+        }
+        if (!fallback.found) {
+          logger.warn(`orderPoller: wgcards order ${row.wgcards_order_id} not found in getOrderInfo's first ${FALLBACK_MAX_PAGES} pages — will retry next cycle`);
+          summary.errors.push({ orderDetailId: row.order_detail_id, error: 'not found in getOrderInfo fallback search' });
+          await markPolled(row.order_detail_id);
+          continue;
+        }
+        info = { firstTo: { deliveryStatus: fallback.deliveryStatus } };
+      } else {
+        logger.warn(`orderPoller: getOrderInfoAndDetail failed for order_detail ${row.order_detail_id} (wgcards order ${row.wgcards_order_id}):`, err.message);
+        summary.errors.push({ orderDetailId: row.order_detail_id, error: err.message });
+        await markPolled(row.order_detail_id); // still respect the tiered cadence even on failure
+        continue;
+      }
     }
 
     const deliveryStatus = info?.firstTo?.deliveryStatus;
@@ -259,8 +307,9 @@ async function run() {
 
 module.exports = {
   run,
-  DELIVERY_STATUS, POLL_TIERS,
+  DELIVERY_STATUS, POLL_TIERS, FALLBACK_MAX_PAGES, FALLBACK_PAGE_SIZE,
   pickIntervalMinutes, shouldPollNow, newRecordsSince, pendingReasonForAge,
+  matchesOrderId, findDeliveryStatusViaList,
 };
 
 // ── CLI entry point ─────────────────────────────────────────────────────

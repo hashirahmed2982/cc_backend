@@ -281,7 +281,27 @@ class WgCardsService {
     return { wgcardsOrderId: result.data, message: result.message };
   }
 
-  /** getOrderInfoAndDetail — Flow E: order status + line-level delivery detail. */
+  /**
+   * getOrderInfo — GetOrderHistory (paginated list, newest first). No
+   * per-order filter, but each record does include deliveryStatus, so this
+   * doubles as a fallback source for it. Confirmed live: the doc's own
+   * example spells this field "uesrId" (typo) — the sandbox actually wants
+   * the correctly-spelled "userId", unlike what the doc shows.
+   */
+  async getOrderInfo({ current = 1, size = 10 } = {}) {
+    const cfg = await this._config();
+    return this._authedCall('/api/getOrderInfo', { userId: cfg.app_id, current, size });
+  }
+
+  /**
+   * getOrderInfoAndDetail — Flow E: order status + line-level delivery
+   * detail. NOTE: as of this writing this endpoint consistently rejects
+   * every payload variant we've tried (correct/typo'd userId spelling,
+   * with/without accountId, with/without size, orderId vs serviceOrder)
+   * with a generic {code:400,msg:"bad request",appId:null} — reported to
+   * WgCards, unresolved. jobs/orderPoller.js falls back to getOrderInfo's
+   * list when this throws a SupplierBusinessError.
+   */
   async getOrderInfoAndDetail({ orderId, current = 1, size = 200 }) {
     const cfg = await this._config();
     return this._authedCall('/api/getOrderInfoAndDetail', { userId: cfg.app_id, orderId, current, size });

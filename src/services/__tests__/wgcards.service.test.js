@@ -237,6 +237,21 @@ describe('WgCardsService', () => {
     });
   });
 
+  test('getOrderInfo sends the correctly-spelled userId (not the doc\'s "uesrId" typo)', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({
+      ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    });
+    axios.post.mockResolvedValueOnce(
+      encryptedAxiosResponse(200, { appId: APP_ID, code: 200, data: { current: 1, pages: 1, records: [], size: 10, total: 0 }, msg: 'success' })
+    );
+
+    const result = await wgcardsService.getOrderInfo({ current: 1, size: 10 });
+
+    expect(sentPayloadFor(0)).toMatchObject({ userId: APP_ID, current: 1, size: 10 });
+    expect(sentPayloadFor(0)).not.toHaveProperty('uesrId');
+    expect(result.records).toEqual([]);
+  });
+
   test('getOrderInfoAndDetail and getBuyCard pass through the decrypted response', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValue({
       ...BASE_CFG, token: 'cached-token', token_expires: new Date(Date.now() + 100 * 60 * 1000),
