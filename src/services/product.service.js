@@ -21,6 +21,7 @@ const PRODUCT_SELECT = `
     p.how_exchange,
     p.is_active,
     p.source,
+    p.spu_type,
     p.supplier_name,
     p.supplier_ref,
     p.sync_enabled,
@@ -33,6 +34,7 @@ const PRODUCT_SELECT = `
     MIN(ps.face_value)        AS face_value,
     MIN(ps.supplier_sku_ref)  AS supplier_sku_ref,
     MIN(ps.realtime_price)    AS realtime_price,
+    MAX(ps.is_custom_value)   AS is_custom_value,
     COALESCE(MAX(inv.unlimited_stock), 0)            AS unlimited_stock,
     COALESCE(SUM(inv.available_qty),   0) AS available_codes,
     COALESCE(dc_counts.total_codes,    0) AS total_codes,
@@ -603,6 +605,12 @@ class ProductService {
       status,
       source: row.source || 'internal',
       isSupplierProduct: isSupplier,
+      // spuType 5 = WgCards "Direct Top-Up" — can't go through the regular
+      // order flow at all (see wgcardsFulfillment.js's requires_direct_
+      // topup_flow bail-out); the admin panel needs this to warn/badge it
+      // rather than let admins sell it through the normal Buy button.
+      spuType: row.spu_type != null ? parseInt(row.spu_type) : null,
+      isCustomValue: !!parseInt(row.is_custom_value || 0),
       unlimitedStock,
       totalCodes: isSupplier ? null : parseInt(row.total_codes) || 0,
       availableCodes: isSupplier ? null : parseInt(row.available_codes) || 0,
