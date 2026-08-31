@@ -10,6 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('./wgcards.service');
+const supplierConfigRepo = require('../repositories/supplierConfig.repository');
 
 // "retry network/timeout only: 2 retries, 2s -> 6s backoff" (§6)
 const RETRY_DELAYS_MS = [2000, 6000];
@@ -53,6 +54,16 @@ async function attemptWgCardsFulfillment({ orderId, item, currency = 'USD', retr
       wgcardsOrderId: existing.wgcards_order_id,
       serviceOrder: existing.wgcards_service_order,
     };
+  }
+
+  // Flow A/G circuit breaker enforcement — the doc: "only that supplier's
+  // products are hidden from orderable state" once integration_status
+  // flips to 'down' (3 consecutive failures, tracked automatically by
+  // every wgcards.service.js call). Fail fast without ever hitting the
+  // network — jobs/healthCheck.js is what probes for recovery.
+  const supplierCfg = await supplierConfigRepo.getBySupplierName('wgcards');
+  if (supplierCfg?.integration_status === 'down') {
+    return { success: false, reason: 'supplier_integration_down' };
   }
 
   const skuRow = await db.queryOne(

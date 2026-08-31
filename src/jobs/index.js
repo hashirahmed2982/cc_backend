@@ -9,6 +9,8 @@ const logger = require('../utils/logger');
 const catalogSync = require('./catalogSync');
 const stockSync = require('./stockSync');
 const orderPoller = require('./orderPoller');
+const healthCheck = require('./healthCheck');
+const balanceMonitor = require('./balanceMonitor');
 
 function guarded(name, fn) {
   return async () => {
@@ -37,6 +39,15 @@ function start() {
   // aren't due yet is correct and matches the doc's own table.
   cron.schedule('*/5 * * * *', guarded('orderPoller', () => orderPoller.run()));
   logger.info('[cron] registered: orderPoller (every 5 min, tiered per-order cadence)');
+
+  // Job #7 — Integration Health Check, every 15 min (Flow A circuit breaker
+  // heartbeat).
+  cron.schedule('*/15 * * * *', guarded('healthCheck', () => healthCheck.run()));
+  logger.info('[cron] registered: healthCheck (every 15 min)');
+
+  // Job #6 — Account Balance Monitor, every 30 min (Flow G).
+  cron.schedule('*/30 * * * *', guarded('balanceMonitor', () => balanceMonitor.run()));
+  logger.info('[cron] registered: balanceMonitor (every 30 min)');
 }
 
 module.exports = { start };

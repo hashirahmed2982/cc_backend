@@ -2,9 +2,11 @@
 
 jest.mock('../../config/database');
 jest.mock('../wgcards.service');
+jest.mock('../../repositories/supplierConfig.repository');
 
 const db = require('../../config/database');
 const wgcardsService = require('../wgcards.service');
+const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
 const { attemptWgCardsFulfillment } = require('../wgcardsFulfillment');
 
 describe('attemptWgCardsFulfillment', () => {
@@ -20,6 +22,31 @@ describe('attemptWgCardsFulfillment', () => {
     expect(result).toEqual({ success: true, alreadyPlaced: true, wgcardsOrderId: 'ORD-1', serviceOrder: 'SVC-1' });
     expect(wgcardsService.placeOrder).not.toHaveBeenCalled();
     expect(wgcardsService.getItemAndStock).not.toHaveBeenCalled();
+  });
+
+  test('circuit breaker: integration_status "down" blocks placement immediately, no network calls at all', async () => {
+    db.queryOne.mockResolvedValueOnce(null); // no existing order_details row
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ integration_status: 'down' });
+
+    const result = await attemptWgCardsFulfillment({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+    expect(result).toEqual({ success: false, reason: 'supplier_integration_down' });
+    expect(wgcardsService.getItemAndStock).not.toHaveBeenCalled();
+    expect(wgcardsService.placeOrder).not.toHaveBeenCalled();
+  });
+
+  test('circuit breaker: integration_status "healthy" proceeds as normal', async () => {
+    db.queryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ wgcards_sku_id: 'wg-1', is_custom_value: 0, spu_type: 2 });
+    db.query.mockResolvedValue(undefined);
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ integration_status: 'healthy' });
+    wgcardsService.getItemAndStock.mockResolvedValueOnce({});
+    wgcardsService.placeOrder.mockResolvedValueOnce({ wgcardsOrderId: 'ORD-1' });
+
+    const result = await attemptWgCardsFulfillment({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+    expect(result.success).toBe(true);
   });
 
   test('sku has no wgcards_sku_id -> rejected before any network call', async () => {
