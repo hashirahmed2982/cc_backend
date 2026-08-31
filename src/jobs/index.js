@@ -6,6 +6,7 @@
 
 const cron = require('node-cron');
 const logger = require('../utils/logger');
+const cronJobRunsRepo = require('../repositories/cronJobRuns.repository');
 const catalogSync = require('./catalogSync');
 const stockSync = require('./stockSync');
 const orderPoller = require('./orderPoller');
@@ -19,8 +20,17 @@ function guarded(name, fn) {
     try {
       const summary = await fn();
       logger.info(`[cron] ${name}: done`, summary);
+      // Best-effort — the admin panel's Cron Health widget reads this, but
+      // a logging failure here must never be why a job run itself reports
+      // as failed.
+      await cronJobRunsRepo.recordRun(name, { status: 'success', summary }).catch((err) => {
+        logger.error(`[cron] ${name}: failed to record run status`, err);
+      });
     } catch (err) {
       logger.error(`[cron] ${name}: failed`, err);
+      await cronJobRunsRepo.recordRun(name, { status: 'failed', error: err.message }).catch((recErr) => {
+        logger.error(`[cron] ${name}: failed to record run status`, recErr);
+      });
     }
   };
 }

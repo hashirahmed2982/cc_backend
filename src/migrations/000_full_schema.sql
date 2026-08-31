@@ -668,6 +668,22 @@ INSERT INTO roles (role_name, description, permissions) VALUES
 -- VALUES (1, 0.00, 'USD', 'active');
 
 -- ============================================
+-- 22. CRON JOB RUNS TABLE (admin panel — Cron Health widget)
+-- ============================================
+-- One row per registered cron job (jobs/index.js's guarded() wrapper
+-- upserts this after every run, success or failure) — lets the admin
+-- panel show "last run: 3 min ago, ok" per job instead of admins having to
+-- grep server logs to tell whether catalogSync/orderPoller/etc are alive.
+CREATE TABLE IF NOT EXISTS cron_job_runs (
+    job_name VARCHAR(100) PRIMARY KEY,
+    last_run_at DATETIME NULL,
+    last_status ENUM('success', 'failed') NULL,
+    last_summary JSON NULL COMMENT 'Whatever the job\'s run() resolved with',
+    last_error TEXT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
 -- COMPLETED
 -- ============================================
 

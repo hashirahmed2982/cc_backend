@@ -16,6 +16,7 @@ const orderRoutes = require('./routes/order.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const clientRoutes = require('./routes/client.routes');
 const adminRoutes = require('./routes/admin.routes');
+const supplierRoutes = require('./routes/supplier.routes');
 const topupRoutes = require('./routes/topup.routes');
 const wgcardsTopupWebhook = require('./routes/webhooks/wgcardsTopup');
 
@@ -143,6 +144,7 @@ app.use(`${API_PREFIX}/orders`, orderRoutes);
 app.use(`${API_PREFIX}/wallet`, walletRoutes);
 app.use(`${API_PREFIX}/client`, clientRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
+app.use(`${API_PREFIX}/admin`, supplierRoutes);
 app.use(`${API_PREFIX}/topup`, topupRoutes);
 
 // app.use(`${API_PREFIX}/reports`, reportRoutes);
