@@ -35,10 +35,14 @@ router.get('/suppliers', async (req, res, next) => {
       lastSync: row.last_sync,
       apiBaseUrl: row.api_base_url,
       // Balance is the sensitive bit — never sent to a plain admin.
-      balance: isSuper ? row.balance : null,
+      // mysql2 returns DECIMAL columns as strings, not numbers — parseFloat
+      // them here (same convention as order.service.js's wallet balance
+      // handling) so the frontend can call .toFixed()/compare them directly
+      // without every caller having to know that.
+      balance: isSuper && row.balance != null ? parseFloat(row.balance) : null,
       balanceCurrency: isSuper ? row.balance_currency : null,
       balanceCheckedAt: isSuper ? row.balance_checked_at : null,
-      lowBalanceThreshold: isSuper ? row.low_balance_threshold : null,
+      lowBalanceThreshold: isSuper && row.low_balance_threshold != null ? parseFloat(row.low_balance_threshold) : null,
       // Credentials are never sent to the client at all, super-admin included
       // — this endpoint is read-only for them; use the PUT below to replace.
     }));
@@ -151,7 +155,12 @@ router.get('/suppliers/:name/topups',
       );
       const [{ total }] = await db.query(`SELECT COUNT(*) AS total FROM wgcards_topup_orders tuo ${where}`, params);
 
-      res.json({ success: true, data: rows, pagination: { page, limit, total } });
+      // amount is DECIMAL — mysql2 returns it as a string, and the admin
+      // panel calls .toFixed() on it directly (same fix as GET /suppliers'
+      // balance, above).
+      const data = rows.map((row) => ({ ...row, amount: parseFloat(row.amount) }));
+
+      res.json({ success: true, data, pagination: { page, limit, total } });
     } catch (err) { next(err); }
   }
 );

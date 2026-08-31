@@ -88,7 +88,11 @@ class TopupController {
       );
       const [{ total }] = await db.query('SELECT COUNT(*) AS total FROM wgcards_topup_orders WHERE user_id = ?', [req.user.user_id]);
 
-      res.json({ success: true, data: rows, pagination: { page, limit, total } });
+      // amount is DECIMAL — mysql2 returns it as a string; parseFloat so
+      // any frontend consuming this can call .toFixed()/do math directly.
+      const data = rows.map((row) => ({ ...row, amount: parseFloat(row.amount) }));
+
+      res.json({ success: true, data, pagination: { page, limit, total } });
     } catch (err) {
       next(err);
     }
@@ -106,7 +110,7 @@ class TopupController {
         [req.params.id, req.user.user_id]
       );
       if (!row) return res.status(404).json({ success: false, message: 'Top-up order not found' });
-      res.json({ success: true, data: row });
+      res.json({ success: true, data: { ...row, amount: parseFloat(row.amount) } });
     } catch (err) {
       next(err);
     }
