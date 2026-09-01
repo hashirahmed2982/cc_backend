@@ -132,42 +132,61 @@ class Gift2GamesService {
       throw new Error(`Gift2Games ${endpoint} failed: HTTP ${res.status}`);
     }
 
+    const body = res.data;
+
+    // CONFIRMED LIVE (check_balance): Gift2Games wraps every response in
+    // {status: 1|0, data, message, erorrCode} and returns HTTP 200 even
+    // when status:0 signals a rejection — checked here, generically,
+    // BEFORE recordSuccess, so a rejected-login response can never be
+    // mistaken for a healthy call (that exact bug existed briefly when
+    // this check lived only in checkBalance(), after _authedCall had
+    // already called recordSuccess unconditionally on HTTP 200).
+    // getProducts/createOrder/getOrderDetails have NOT independently
+    // confirmed this envelope shape live yet — if one of them turns out
+    // to respond differently, this generalization needs revisiting for
+    // that endpoint specifically.
+    if (body && body.status === 0) {
+      const isAuthFailure = /login/i.test(body.erorrCode || body.errorCode || '');
+      if (isAuthFailure) {
+        await supplierConfigRepo.recordFailure(SUPPLIER);
+        throw new SupplierAuthError(`Gift2Games ${endpoint}: ${body.message || body.erorrCode || 'login rejected'}`);
+      }
+      // A coherent rejection FROM Gift2Games about THIS request (e.g. bad
+      // productId, malformed field) — not a sign the integration itself
+      // is unhealthy, same convention as WgCards' SupplierBusinessError.
+      // Never trips the circuit breaker.
+      throw new SupplierBusinessError(body.message || body.erorrCode || `${endpoint} rejected`);
+    }
+
     await supplierConfigRepo.recordSuccess(SUPPLIER);
-    return res.data;
+    return body && body.data !== undefined ? body.data : body;
   }
 
   // ── SupplierAdapter interface (Master Plan §1) ──────────────────────────
 
-  /** check_balance — Flow G. Per the doc, every response ALSO carries its
-   * own metaData.balance/balance2 — cheapest option is reading that off
-   * whatever call you're already making rather than a dedicated call each
-   * time, per the master plan's own note; this is still provided as the
-   * dedicated fallback for a quiet period with no other activity, same
-   * role healthCheck.js gives WgCards' getAccount().
-   *
-   * CONFIRMED LIVE: the full envelope is {status: 1|0, data: {userId,
-   * userBalance, userCurrency}, metaData: {balance, currency, balance2,
-   * currency2}, message, erorrCode}. status:0 comes back as HTTP 200 (a
-   * rejected login looks identical to a rejected request otherwise), so
-   * it's checked explicitly rather than trusting the HTTP status code.
-   * Not yet confirmed whether this exact envelope shape is universal
-   * across every Gift2Games endpoint or specific to check_balance —
-   * createOrder's own success/failure shape (orderStatus) is checked
-   * separately in createOrder() below; revisit both once getProducts/
-   * createOrder have been exercised live too. */
+  /** check_balance — Flow G. CONFIRMED LIVE end-to-end: returns
+   * {userId, userBalance, userCurrency} (already unwrapped from the
+   * envelope by _authedCall). Per the doc, every response ALSO carries
+   * its own metaData.balance/balance2 (dropped by the unwrap — read
+   * res.data.metaData directly from api_logs if that's ever needed) —
+   * cheapest option is reading that off whatever call you're already
+   * making rather than a dedicated call each time, per the master plan's
+   * own note; this is still provided as the dedicated fallback for a
+   * quiet period with no other activity, same role healthCheck.js gives
+   * WgCards' getAccount(). */
   async checkBalance() {
-    const result = await this._authedCall('/check_balance', {}, { method: 'GET' });
-    if (!result || result.status === 0) {
-      throw new SupplierAuthError(`Gift2Games check_balance: ${result?.message || result?.erorrCode || 'login rejected'}`);
-    }
-    return result.data;
+    return this._authedCall('/check_balance', {}, { method: 'GET' });
   }
 
-  /** getProducts — Flow B2. cost is read from the 'price' field, NOT
-   * 'sellPrice' (the doc explicitly calls this out) — that mapping
-   * belongs in gift2gamesCatalogSync once it exists, not here; this
-   * method just returns whatever the supplier sends. inStock is a
-   * boolean per SKU (no quantity), unlike WgCards' numeric stock. */
+  /** getProducts — Flow B2. NOT yet confirmed live — inherits
+   * _authedCall's envelope unwrap on the assumption it matches
+   * check_balance's confirmed shape; if the real response turns out
+   * differently shaped, this is the first place it'll surface. cost is
+   * read from the 'price' field, NOT 'sellPrice' (the doc explicitly
+   * calls this out) — that mapping belongs in gift2gamesCatalogSync once
+   * it exists, not here; this method just returns whatever's under
+   * `data`. inStock is a boolean per SKU (no quantity), unlike WgCards'
+   * numeric stock. */
   async getProducts({ inStock } = {}) {
     return this._authedCall('/getProducts', inStock !== undefined ? { inStock: inStock ? 1 : 0 } : {}, { method: 'GET' });
   }
@@ -185,13 +204,22 @@ class Gift2GamesService {
   }
 
   /**
-   * create_order — Flow D. additionalFields are keyed by fieldKey (per
-   * the doc — mirrors WgCards' Direct Top-Up attributeValues in spirit,
-   * a dynamic named list rather than fixed columns).
-   * referenceNumber MUST be freshly generated per attempt by the caller
-   * (never reused) — but per Flow H, callers must getOrderDetails() with
-   * that SAME reference before ever retrying an ambiguous failure, so the
-   * reference only changes across independent attempts, not within one.
+   * create_order — Flow D. NOT yet confirmed live. additionalFields are
+   * keyed by fieldKey (per the doc — mirrors WgCards' Direct Top-Up
+   * attributeValues in spirit, a dynamic named list rather than fixed
+   * columns). referenceNumber MUST be freshly generated per attempt by
+   * the caller (never reused) — but per Flow H, callers must
+   * getOrderDetails() with that SAME reference before ever retrying an
+   * ambiguous failure, so the reference only changes across independent
+   * attempts, not within one.
+   *
+   * result here is already unwrapped to the envelope's `data` by
+   * _authedCall (assuming create_order shares check_balance's confirmed
+   * envelope shape — not yet independently verified) — the orderStatus
+   * check below is for a well-formed request Gift2Games still declines
+   * (e.g. out of stock), distinct from the outer status:0 rejection
+   * _authedCall already throws SupplierBusinessError for on its own
+   * (a bad productId, say) before this method even sees a result.
    */
   async createOrder({ productId, referenceNumber, additionalFields = [] }) {
     const result = await this._authedCall('/create_order', { productId, referenceNumber, additionalFields });

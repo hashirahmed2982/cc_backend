@@ -47,6 +47,31 @@ describe('Gift2GamesService', () => {
     });
   });
 
+  test('a rejected login (status:0) does NOT call recordSuccess — regression test for the bug where _authedCall recorded success on HTTP 200 before the body-level check existed', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue(CFG);
+    axios.request.mockResolvedValueOnce({
+      status: 200,
+      data: { status: 0, erorrCode: 'login_unsuccessful', message: 'Incorrect Login' },
+    });
+
+    await expect(gift2gamesService.checkBalance()).rejects.toThrow();
+
+    expect(supplierConfigRepo.recordSuccess).not.toHaveBeenCalled();
+    expect(supplierConfigRepo.recordFailure).toHaveBeenCalledWith('gift2games');
+  });
+
+  test('a status:0 rejection with a non-login erorrCode is a SupplierBusinessError, not auth — and does NOT trip the circuit breaker', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue(CFG);
+    axios.request.mockResolvedValueOnce({
+      status: 200,
+      data: { status: 0, erorrCode: 'invalid_product', message: 'Unknown productId' },
+    });
+
+    await expect(gift2gamesService.createOrder({ productId: 'bad', referenceNumber: 'r1' }))
+      .rejects.toMatchObject({ code: 'supplier_business_rejection' });
+    expect(supplierConfigRepo.recordFailure).not.toHaveBeenCalled();
+  });
+
   test('401 -> SupplierAuthError, no retry built in here (that policy lives in the fulfillment module)', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValue(CFG);
     axios.request.mockResolvedValueOnce({ status: 401, data: {} });
