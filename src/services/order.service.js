@@ -739,6 +739,8 @@ class OrderService {
          u.full_name AS clientName, u.email AS clientEmail, u.company_name AS clientCompany,
          od.order_detail_id, od.product_id, od.sku_id, od.quantity,
          od.delivered_qty, od.unit_price, od.delivery_status AS item_delivery_status,
+         od.fulfillment_supplier, od.fulfillment_attempts, od.pending_reason,
+         od.wgcards_order_id, od.wgcards_service_order, od.last_polled_at,
          p.product_name
        FROM orders o
        JOIN users u           ON u.user_id      = o.user_id
@@ -786,6 +788,17 @@ class OrderService {
         pendingQty: r.quantity - r.delivered_qty,
         unitPrice: parseFloat(r.unit_price),
         deliveryStatus: r.item_delivery_status,
+        // §10.7 fulfillment audit trail — which supplier ultimately
+        // fulfilled (or is currently attempting) this line, why it's
+        // stuck if it is, and the full cross-supplier attempt history.
+        fulfillmentSupplier: r.fulfillment_supplier || null,
+        pendingReason: r.pending_reason || null,
+        supplierOrderId: r.wgcards_order_id || null,
+        supplierServiceOrder: r.wgcards_service_order || null,
+        lastPolledAt: r.last_polled_at || null,
+        fulfillmentAttempts: r.fulfillment_attempts
+          ? (typeof r.fulfillment_attempts === 'string' ? JSON.parse(r.fulfillment_attempts) : r.fulfillment_attempts)
+          : [],
       })),
     };
   }
