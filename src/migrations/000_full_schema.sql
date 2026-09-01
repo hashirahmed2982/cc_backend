@@ -400,9 +400,9 @@ CREATE TABLE IF NOT EXISTS otp_verifications (
 CREATE TABLE IF NOT EXISTS supplier_config (
     config_id INT PRIMARY KEY AUTO_INCREMENT,
     supplier_name VARCHAR(100) NOT NULL,
-    app_id VARCHAR(100) NOT NULL COMMENT 'ENCRYPTED',
-    account_id VARCHAR(100) NOT NULL COMMENT 'ENCRYPTED',
-    app_key VARCHAR(255) NOT NULL COMMENT 'ENCRYPTED',
+    app_id TEXT NOT NULL COMMENT 'ENCRYPTED',
+    account_id TEXT NOT NULL COMMENT 'ENCRYPTED',
+    app_key TEXT NOT NULL COMMENT 'ENCRYPTED — widened from VARCHAR(255), too narrow once a JWT is encrypted+hex-encoded',
     api_base_url VARCHAR(255) NOT NULL,
     token TEXT NULL COMMENT 'Current authentication token',
     token_expires DATETIME NULL,
