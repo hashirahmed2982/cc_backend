@@ -13,6 +13,7 @@
     "migrate:multi-supplier": "node src/migrations/migrate.js 012_multi_supplier_framework.sql",
     "seed": "node src/migrations/seed.js",
     "seed:wgcards": "node src/migrations/seed_wgcards_config.js",
+    "seed:gift2games": "node src/migrations/seed_gift2games_config.js",
     "test": "jest --coverage"
   },
   "keywords": [
