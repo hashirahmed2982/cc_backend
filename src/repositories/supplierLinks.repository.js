@@ -104,6 +104,13 @@ async function upsertStagingItem({
   );
 }
 
+async function getStagingItemBySupplierRef(supplier, supplierSkuRef) {
+  return db.queryOne(
+    'SELECT * FROM supplier_catalog_items WHERE supplier = ? AND supplier_sku_ref = ?',
+    [supplier, String(supplierSkuRef)]
+  );
+}
+
 async function getPendingReview({ supplier, page = 1, limit = 50 } = {}) {
   const conds = ["status = 'pending_review'"];
   const params = [];
@@ -158,6 +165,6 @@ async function addAlias(alias, canonicalBrand) {
 module.exports = {
   getActiveLinksForSku, getLinkBySupplierRef, getLinkById, getLinksForSku,
   upsertLink, setLinkActive, setPriorityOverride, updateStockStatus,
-  upsertStagingItem, getPendingReview, getStagingItem, markStagingStatus,
+  upsertStagingItem, getPendingReview, getStagingItem, getStagingItemBySupplierRef, markStagingStatus,
   getCanonicalBrand, addAlias,
 };

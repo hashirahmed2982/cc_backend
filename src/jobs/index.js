@@ -13,6 +13,7 @@ const orderPoller = require('./orderPoller');
 const healthCheck = require('./healthCheck');
 const balanceMonitor = require('./balanceMonitor');
 const wgcardsTopupReconciler = require('./wgcardsTopupReconciler');
+const gift2gamesCatalogSync = require('./gift2gamesCatalogSync');
 
 function guarded(name, fn) {
   return async () => {
@@ -66,6 +67,13 @@ function start() {
   // is correct and matches the doc's own "every 10 min from the 35-min mark".
   cron.schedule('*/10 * * * *', guarded('wgcardsTopupReconciler', () => wgcardsTopupReconciler.run()));
   logger.info('[cron] registered: wgcardsTopupReconciler (every 10 min, 35-min fallback window)');
+
+  // Job #1b — Gift2Games Catalog Sync, every 6h (Flow B2 / §9.2). Same
+  // cadence as WgCards' catalogSync — the two are independent per-supplier
+  // syncs, not a shared job, since each supplier's guard/skip logic
+  // (jobs/_supplierGate.js) is per-supplier anyway.
+  cron.schedule('0 */6 * * *', guarded('gift2gamesCatalogSync', () => gift2gamesCatalogSync.run()));
+  logger.info('[cron] registered: gift2gamesCatalogSync (every 6h)');
 }
 
 module.exports = { start };
