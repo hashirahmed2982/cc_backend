@@ -19,15 +19,18 @@ describe('Gift2GamesService', () => {
     expect(axios.request).not.toHaveBeenCalled();
   });
 
-  test('sends the JWT as a Bearer token, unencrypted body (unlike WgCards)', async () => {
+  test('sends the JWT raw with NO Bearer prefix (confirmed live), unencrypted body (unlike WgCards)', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValue(CFG);
-    axios.request.mockResolvedValueOnce({ status: 200, data: { userBalance: 100, userCurrency: 'USD' } });
+    axios.request.mockResolvedValueOnce({
+      status: 200,
+      data: { status: 1, data: { userId: '9633', userBalance: '300', userCurrency: 'USD' }, metaData: { balance: 300, currency: 'USD' } },
+    });
 
     const result = await gift2gamesService.checkBalance();
 
-    expect(result).toEqual({ userBalance: 100, userCurrency: 'USD' });
+    expect(result).toEqual({ userId: '9633', userBalance: '300', userCurrency: 'USD' });
     const call = axios.request.mock.calls[0][0];
-    expect(call.headers.Authorization).toBe('Bearer test-jwt');
+    expect(call.headers.Authorization).toBe('test-jwt'); // NOT "Bearer test-jwt" — confirmed live
     expect(call.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
   });
 

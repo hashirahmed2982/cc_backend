@@ -1,20 +1,29 @@
 // services/gift2games.service.js
 // Gift2Games SupplierAdapter implementation (Master Plan §1/§5, Section 10
-// table). Structurally complete — same shape a caller in supplierSelection.
-// service.js can dispatch to exactly like wgcards.service.js — but every
-// method that hits the network will fail until a real JWT/host is in
-// supplier_config, because there isn't one yet (no Gift2Games account
-// access as of this writing). DO NOT treat a passing unit test here as
-// proof this adapter works against the real Gift2Games API — the request/
-// response shapes below come from the master plan's own description of
-// the doc, not a live call, and have never been exercised against the
-// actual service.
+// table).
+//
+// LIVE STATUS as of the first real credential (2026-09-01): checkBalance()
+// is CONFIRMED working end-to-end against the real API — auth header
+// shape, the {status,data,message,erorrCode} response envelope, and the
+// balance field names are all verified live (see checkBalance()'s own
+// comment and scripts/debug-gift2games-auth-variants.js). getProducts(),
+// createOrder(), and getOrderDetails() have NOT been exercised live yet —
+// their request/response shapes still come from the master plan's
+// description of the doc, not a confirmed call, and may need the same
+// kind of correction checkBalance() just got. Don't treat a passing unit
+// test for those three as proof they work against the real API.
 //
 // Key differences from wgcards.service.js, per the master plan:
-//   - Auth: static JWT in the Authorization header. No refresh endpoint
-//     exists — 0 auto-retries on auth failure (a human has to get a new
-//     token), unlike WgCards' forced-refresh-and-retry-once.
+//   - Auth: static JWT in the Authorization header — CONFIRMED LIVE: sent
+//     as the raw token with NO "Bearer " prefix (unlike most APIs, and
+//     unlike what the master plan's paraphrase implied). No refresh
+//     endpoint exists — 0 auto-retries on auth failure (a human has to
+//     get a new token), unlike WgCards' forced-refresh-and-retry-once.
 //   - No payload encryption at all (WgCards AES/ECB's every request+response).
+//   - CONFIRMED LIVE: every response is wrapped in {status: 1|0, data,
+//     message, erorrCode} (note the doc's own typo, "erorrCode") — HTTP
+//     200 even when status:0 signals a rejected request, so this must be
+//     checked explicitly rather than trusting the HTTP status code.
 //   - Idempotency: referenceNumber (a UUID we generate) — but Gift2Games
 //     does NOT reject a duplicate reference the way WgCards rejects a
 //     duplicate serviceOrder. Flow H (§10 addendum) exists specifically
@@ -83,7 +92,11 @@ class Gift2GamesService {
         params: method === 'GET' ? payload : undefined,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: `Bearer ${cfg.app_key}`, // app_key column repurposed to hold the static JWT
+          // CONFIRMED LIVE: the raw JWT, no "Bearer " prefix — sending it
+          // with "Bearer " gets a 200-with-status:0 "Incorrect Login"
+          // (see this file's header comment). app_key column repurposed
+          // to hold the static JWT.
+          Authorization: cfg.app_key,
         },
         timeout: 15000,
         validateStatus: () => true,
@@ -132,21 +145,22 @@ class Gift2GamesService {
    * dedicated fallback for a quiet period with no other activity, same
    * role healthCheck.js gives WgCards' getAccount().
    *
-   * CONFIRMED LIVE (first-ever real call): Gift2Games returns HTTP 200
-   * even for a rejected login — {status:0, erorrCode:"login_unsuccessful",
-   * message:"Incorrect Login"} — _authedCall's HTTP-status-only checks
-   * never see this as a failure at all, so it's checked explicitly here.
-   * Not yet confirmed whether this {status,erorrCode} envelope is
-   * universal across every Gift2Games endpoint or specific to
-   * check_balance — createOrder's own success/failure shape (orderStatus)
-   * is checked separately in createOrder() below; revisit both once
-   * getProducts/createOrder have been exercised live too. */
+   * CONFIRMED LIVE: the full envelope is {status: 1|0, data: {userId,
+   * userBalance, userCurrency}, metaData: {balance, currency, balance2,
+   * currency2}, message, erorrCode}. status:0 comes back as HTTP 200 (a
+   * rejected login looks identical to a rejected request otherwise), so
+   * it's checked explicitly rather than trusting the HTTP status code.
+   * Not yet confirmed whether this exact envelope shape is universal
+   * across every Gift2Games endpoint or specific to check_balance —
+   * createOrder's own success/failure shape (orderStatus) is checked
+   * separately in createOrder() below; revisit both once getProducts/
+   * createOrder have been exercised live too. */
   async checkBalance() {
     const result = await this._authedCall('/check_balance', {}, { method: 'GET' });
-    if (result && result.status === 0) {
-      throw new SupplierAuthError(`Gift2Games check_balance: ${result.message || result.erorrCode || 'login rejected'}`);
+    if (!result || result.status === 0) {
+      throw new SupplierAuthError(`Gift2Games check_balance: ${result?.message || result?.erorrCode || 'login rejected'}`);
     }
-    return result;
+    return result.data;
   }
 
   /** getProducts — Flow B2. cost is read from the 'price' field, NOT
