@@ -14,6 +14,7 @@ require('dotenv').config();
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('../services/wgcards.service');
+const { checkSupplierEnabled } = require('./_supplierGate');
 
 const BATCH_SIZE = 50;
 const BATCH_DELAY_MS = 2000; // "~2s apart" per the doc's own Flow C description
@@ -86,6 +87,12 @@ async function countStaleInventory() {
 // ── Runner ──────────────────────────────────────────────────────────────
 
 async function run({ batchSize = BATCH_SIZE, batchDelayMs = BATCH_DELAY_MS } = {}) {
+  const { enabled } = await checkSupplierEnabled('wgcards');
+  if (!enabled) {
+    logger.info('stockSync: wgcards is disabled by admin — skipping');
+    return { skipped: true, reason: 'supplier_disabled' };
+  }
+
   const skuIds = await getActiveWgCardsSkuIds();
   const batches = chunk(skuIds, batchSize);
   const summary = { totalSkus: skuIds.length, batches: batches.length, updated: 0, failedBatches: [] };

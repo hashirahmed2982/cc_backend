@@ -2,9 +2,11 @@
 
 jest.mock('../../config/database');
 jest.mock('../../services/wgcards.service');
+jest.mock('../../repositories/supplierConfig.repository');
 
 const db = require('../../config/database');
 const wgcardsService = require('../../services/wgcards.service');
+const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
 const { run, chunk, deriveInventoryUpdate } = require('../stockSync');
 
 describe('stockSync pure helpers', () => {
@@ -55,6 +57,15 @@ describe('stockSync pure helpers', () => {
 describe('stockSync.run', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({ is_active: 1, integration_status: 'healthy' });
+  });
+
+  test('supplier disabled by admin -> skips entirely, no DB/network calls', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 0 });
+    const result = await run();
+    expect(result).toEqual({ skipped: true, reason: 'supplier_disabled' });
+    expect(db.query).not.toHaveBeenCalled();
+    expect(wgcardsService.getStock).not.toHaveBeenCalled();
   });
 
   test('batches SKUs, applies updates, and reports a stale count', async () => {

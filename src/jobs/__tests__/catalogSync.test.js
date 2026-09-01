@@ -1,6 +1,9 @@
 'use strict';
 
-const { mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert } = require('../catalogSync');
+jest.mock('../../repositories/supplierConfig.repository');
+
+const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
+const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert } = require('../catalogSync');
 
 describe('catalogSync pure mapping', () => {
   describe('mapFaceValue', () => {
@@ -70,5 +73,15 @@ describe('catalogSync pure mapping', () => {
       const result = mapSkuForUpsert({ skuId: '1', skuName: 'x', minFaceValue: 1, maxFaceValue: 1, skuPrice: 1 }, 0);
       expect(result.priceCurrency).toBe('USD');
     });
+  });
+});
+
+describe('catalogSync.run', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('supplier disabled by admin -> skips entirely, never touches the catalog', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 0 });
+    const result = await run();
+    expect(result).toEqual({ skipped: true, reason: 'supplier_disabled' });
   });
 });

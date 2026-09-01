@@ -33,6 +33,7 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsTopupService = require('../services/wgcardsTopup.service');
 const { findDeliveryStatusViaList, DELIVERY_STATUS } = require('./orderPoller');
+const { checkSupplierEnabled } = require('./_supplierGate');
 
 const RECONCILE_AFTER_MINUTES = 35;
 
@@ -45,6 +46,12 @@ function deliveryStatusToTopupStatus(deliveryStatus) {
 }
 
 async function run() {
+  const { enabled } = await checkSupplierEnabled('wgcards');
+  if (!enabled) {
+    logger.info('wgcardsTopupReconciler: wgcards is disabled by admin — skipping');
+    return { skipped: true, reason: 'supplier_disabled' };
+  }
+
   const due = await db.query(
     `SELECT topup_order_id, order_reference, wgcards_order_id, created_at
        FROM wgcards_topup_orders

@@ -89,6 +89,44 @@ router.put('/suppliers/:name/credentials',
   }
 );
 
+// PATCH /api/v1/admin/suppliers/:name/active — super-admin only. The
+// admin on/off switch: disabling a supplier is a strict superset of
+// "down" — every cron job for it stops running (jobs/_supplierGate.js)
+// and supplierSelection.service.js excludes its links from §10
+// selection, same treatment as a circuit-breaker outage, just admin-
+// driven instead of auto-detected.
+router.patch('/suppliers/:name/active',
+  isSuperAdmin,
+  [
+    param('name').isString().trim().notEmpty(),
+    body('isActive').isBoolean().withMessage('isActive must be true or false'),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const { name } = req.params;
+      const { isActive } = req.body;
+
+      const existing = await supplierConfigRepo.getBySupplierName(name);
+      if (!existing) return res.status(404).json({ success: false, message: `No supplier_config row for "${name}"` });
+
+      await supplierConfigRepo.setActive(name, isActive);
+
+      await auditService.log({
+        user_id: req.user.user_id,
+        action: isActive ? 'supplier_enabled' : 'supplier_disabled',
+        entity_type: 'supplier_config',
+        entity_id: name,
+        new_values: { isActive },
+        ip_address: req.ip,
+        user_agent: req.get('User-Agent'),
+      });
+
+      res.json({ success: true, message: `${name} ${isActive ? 'enabled' : 'disabled'}` });
+    } catch (err) { next(err); }
+  }
+);
+
 // GET /api/v1/admin/suppliers/:name/logs — Integration Activity / Error Log
 router.get('/suppliers/:name/logs',
   [

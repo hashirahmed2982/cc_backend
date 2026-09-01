@@ -27,6 +27,7 @@ require('dotenv').config();
 const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('../services/wgcards.service');
+const { checkSupplierEnabled } = require('./_supplierGate');
 
 const PAGE_SIZE = 50;
 const PAGE_DELAY_MS = 1600; // keeps us under getItem's 40 calls/60s limit even for a large catalog
@@ -210,6 +211,12 @@ async function syncOneItem(itemRaw, defaultMarginPercent) {
 // ── Pagination driver ───────────────────────────────────────────────────
 
 async function run({ pageSize = PAGE_SIZE } = {}) {
+  const { enabled } = await checkSupplierEnabled('wgcards');
+  if (!enabled) {
+    logger.info('catalogSync: wgcards is disabled by admin — skipping');
+    return { skipped: true, reason: 'supplier_disabled' };
+  }
+
   const defaultMarginPercent = await getDefaultMarginPercent();
   const summary = { itemsProcessed: 0, skusCreated: 0, skusUpdated: 0, skusSkipped: 0, errors: [] };
 

@@ -30,7 +30,23 @@ describe('pickTrackedAccount', () => {
 });
 
 describe('balanceMonitor.run', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // First call inside run() is always the enable/disable gate check —
+    // default it healthy/enabled here so each test below only needs to
+    // queue the SECOND call (the threshold lookup) on top of this.
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 1 });
+  });
+
+  test('supplier disabled by admin -> skips entirely, never calls getAccount', async () => {
+    supplierConfigRepo.getBySupplierName.mockReset(); // override the beforeEach default for this one test
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 0 });
+
+    const result = await run();
+
+    expect(result).toEqual({ skipped: true, reason: 'supplier_disabled' });
+    expect(wgcardsService.getAccount).not.toHaveBeenCalled();
+  });
 
   test('saves the USD balance and reports ok when above threshold', async () => {
     wgcardsService.getAccount.mockResolvedValueOnce({

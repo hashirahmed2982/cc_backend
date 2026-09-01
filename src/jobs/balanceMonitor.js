@@ -21,6 +21,7 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('../services/wgcards.service');
 const supplierConfigRepo = require('../repositories/supplierConfig.repository');
+const { checkSupplierEnabled } = require('./_supplierGate');
 
 const TRACKED_CURRENCY = 'USD';
 
@@ -31,6 +32,12 @@ function pickTrackedAccount(accounts, currency = TRACKED_CURRENCY) {
 }
 
 async function run() {
+  const { enabled } = await checkSupplierEnabled('wgcards');
+  if (!enabled) {
+    logger.info('balanceMonitor: wgcards is disabled by admin — skipping');
+    return { skipped: true, reason: 'supplier_disabled' };
+  }
+
   let accountData;
   try {
     accountData = await wgcardsService.getAccount();

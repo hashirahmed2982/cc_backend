@@ -25,6 +25,10 @@ const supplierConfigRepo = require('../repositories/supplierConfig.repository');
 
 async function run() {
   const before = await supplierConfigRepo.getBySupplierName('wgcards');
+  if (before && !before.is_active) {
+    logger.info('healthCheck: wgcards is disabled by admin — skipping');
+    return { skipped: true, reason: 'supplier_disabled' };
+  }
   const wasDown = before?.integration_status === 'down';
 
   try {

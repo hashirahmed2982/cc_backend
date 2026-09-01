@@ -2,6 +2,7 @@
 
 jest.mock('../../config/database', () => ({ query: jest.fn(), end: jest.fn() }));
 jest.mock('../../services/wgcardsTopup.service', () => ({ resolveTopup: jest.fn() }));
+jest.mock('../../repositories/supplierConfig.repository');
 jest.mock('../orderPoller', () => ({
   findDeliveryStatusViaList: jest.fn(),
   DELIVERY_STATUS: { PENDING: 1, PARTIAL: 2, FULL: 3, PARTIAL_CANCELLED: 4, FULL_CANCELLED: 5 },
@@ -9,6 +10,7 @@ jest.mock('../orderPoller', () => ({
 
 const db = require('../../config/database');
 const wgcardsTopupService = require('../../services/wgcardsTopup.service');
+const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
 const { findDeliveryStatusViaList } = require('../orderPoller');
 const { run, deliveryStatusToTopupStatus } = require('../wgcardsTopupReconciler');
 
@@ -23,7 +25,19 @@ describe('deliveryStatusToTopupStatus', () => {
 });
 
 describe('wgcardsTopupReconciler.run', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({ is_active: 1 });
+  });
+
+  test('supplier disabled by admin -> skips entirely, never queries wgcards_topup_orders', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 0 });
+
+    const result = await run();
+
+    expect(result).toEqual({ skipped: true, reason: 'supplier_disabled' });
+    expect(db.query).not.toHaveBeenCalled();
+  });
 
   test('no rows past the 35-min mark -> no-op', async () => {
     db.query.mockResolvedValueOnce([]);

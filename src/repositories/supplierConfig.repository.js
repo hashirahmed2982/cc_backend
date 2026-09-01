@@ -105,6 +105,15 @@ async function saveBalance(supplierName, balance, currency) {
   );
 }
 
+/** Admin on/off switch — "a option to disable or enable any particular
+ * supplier at any time". Every per-supplier cron job checks this via
+ * jobs/_supplierGate.js before doing anything, and supplierSelection.
+ * service.js filters a disabled supplier's links out of §10 selection —
+ * a disabled supplier is a strict superset of "down". */
+async function setActive(supplierName, isActive) {
+  await db.query('UPDATE supplier_config SET is_active = ? WHERE supplier_name = ?', [isActive ? 1 : 0, supplierName]);
+}
+
 module.exports = {
   getBySupplierName,
   upsertCredentials,
@@ -112,5 +121,6 @@ module.exports = {
   clearToken,
   recordFailure,
   recordSuccess,
+  setActive,
   saveBalance,
 };
