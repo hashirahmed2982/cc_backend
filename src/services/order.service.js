@@ -8,6 +8,7 @@ const stream = require('stream');
 const emailService = require('./email.service');
 const auditService = require('../services/audit.service');
 const wgcardsFulfillment = require('./wgcardsFulfillment');
+const supplierSelection = require('./supplierSelection.service');
 const { decrypt } = require('../utils/dataCrypto');
 
 // ─── Generate order number ────────────────────────────────────────────────────
@@ -262,23 +263,39 @@ class OrderService {
     const pendingItems = [];
 
     for (const item of resolvedItems) {
-      if (item.source === 'wgcards') {
-        // Flow D, WgCards branch (Phase 4). Deliberately NOT checking local
-        // digital_codes first here — unlike the doc's fully-generic hybrid
-        // model, this codebase ties `source` to one exclusive fulfillment
-        // path per product: a wgcards-sourced product has no local codes to
-        // begin with (nobody manually uploads codes for API-fulfilled
-        // products), so there's nothing to check.
-        const result = await wgcardsFulfillment.attemptWgCardsFulfillment({
+      if (item.source !== 'internal') {
+        // Flow D, supplier branch (Phase 4, generalized in Phase 8 to
+        // Master Plan §10's multi-supplier selection). Deliberately NOT
+        // checking local digital_codes first here — unlike the doc's
+        // fully-generic hybrid model, this codebase ties `source` to one
+        // exclusive fulfillment path per product: a supplier-sourced
+        // product has no local codes to begin with (nobody manually
+        // uploads codes for API-fulfilled products).
+        let result = await supplierSelection.selectAndFulfill({
           orderId,
           item: { skuId: item.skuId, quantity: item.quantity },
           currency,
         });
 
+        // Safety net for the deploy window before
+        // scripts/backfill-sku-supplier-links.js has been run against an
+        // existing DB: a WgCards product with no sku_supplier_links row
+        // yet falls straight back to the pre-Phase-8 direct call rather
+        // than silently stop fulfilling orders. Once the backfill runs
+        // every WgCards SKU has a link and this branch stops firing.
+        if (!result.success && result.reason === 'no_active_supplier_link' && item.source === 'wgcards') {
+          logger.warn(`order.service: sku ${item.skuId} has no sku_supplier_links row yet — falling back to direct WgCards fulfillment. Run scripts/backfill-sku-supplier-links.js.`);
+          result = await wgcardsFulfillment.attemptWgCardsFulfillment({
+            orderId,
+            item: { skuId: item.skuId, quantity: item.quantity },
+            currency,
+          });
+        }
+
         if (result.success) {
-          // Order placed (or already was) — Flow E's poller (Phase 5, not
-          // yet built) is what actually delivers the code and marks this
-          // delivered. Until then it correctly sits as pending/processing.
+          // Order placed (or already was) — Flow E's poller is what
+          // actually delivers the code and marks this delivered. Until
+          // then it correctly sits as pending/processing.
           pendingItems.push({
             productId: item.productId,
             productName: item.productName,
@@ -288,7 +305,7 @@ class OrderService {
             delivered: 0,
             pending: item.quantity,
             reason: 'awaiting_supplier_delivery',
-            wgcardsOrderId: result.wgcardsOrderId,
+            supplierOrderId: result.wgcardsOrderId || result.gift2gamesOrderId || null,
           });
         } else {
           pendingItems.push({
@@ -302,12 +319,6 @@ class OrderService {
             reason: result.reason,
           });
         }
-        continue;
-      }
-
-      if (item.source !== 'internal') {
-        // gift2games (deferred) or any other not-yet-implemented source.
-        pendingItems.push({ ...item, reason: 'supplier_api_pending', codes: [] });
         continue;
       }
 

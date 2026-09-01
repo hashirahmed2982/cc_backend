@@ -141,4 +141,9 @@ async function attemptWgCardsFulfillment({ orderId, item, currency = 'USD', retr
   return { success: false, reason, error: lastError?.message, serviceOrder };
 }
 
-module.exports = { attemptWgCardsFulfillment };
+// attemptFulfillment is a generic alias to the exact same function — lets
+// supplierSelection.service.js (Master Plan §10) dispatch to any supplier
+// module polymorphically without a per-supplier method-name lookup table.
+// attemptWgCardsFulfillment itself is untouched, still exported under its
+// original name for every existing caller/test.
+module.exports = { attemptWgCardsFulfillment, attemptFulfillment: attemptWgCardsFulfillment };

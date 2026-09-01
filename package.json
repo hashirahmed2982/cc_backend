@@ -10,6 +10,7 @@
     "migrate:wgcards": "node src/migrations/migrate.js 007_wgcards_integration.sql",
     "migrate:wgcards-topup": "node src/migrations/migrate.js 010_wgcards_topup.sql",
     "migrate:cron-health": "node src/migrations/migrate.js 011_cron_job_runs.sql",
+    "migrate:multi-supplier": "node src/migrations/migrate.js 012_multi_supplier_framework.sql",
     "seed": "node src/migrations/seed.js",
     "seed:wgcards": "node src/migrations/seed_wgcards_config.js",
     "test": "jest --coverage"

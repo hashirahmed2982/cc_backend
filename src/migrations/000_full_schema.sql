@@ -308,7 +308,9 @@ CREATE TABLE IF NOT EXISTS order_details (
     delivery_status ENUM('pending', 'partial', 'completed', 'failed') NOT NULL DEFAULT 'pending',
     wgcards_service_order VARCHAR(100) NULL COMMENT 'Our idempotency key sent as serviceOrder — one per placeOrder attempt',
     wgcards_order_id VARCHAR(100) NULL COMMENT 'Supplier order id once placeOrder succeeds — presence means "already placed, do not re-order"',
-    pending_reason VARCHAR(50) NULL COMMENT 'insufficient_inventory | supplier_rejected | supplier_timeout | supplier_auth_failure | awaiting_supplier_delivery | custom_value_not_supported_yet | supplier_api_pending | requires_direct_topup_flow | delayed | delayed_needs_admin_decision | supplier_cancelled | supplier_integration_down',
+    fulfillment_supplier VARCHAR(50) NULL COMMENT 'Which supplier ultimately fulfilled (or is currently attempting) this line — wgcards | gift2games | internal',
+    fulfillment_attempts JSON NULL COMMENT 'Master Plan §10.7 — full cross-supplier attempt history: [{supplier, serviceOrder, attemptedAt, result, reason}], oldest first. One entry per supplier tried, not per retry within a supplier (each supplier module owns its own retry policy).',
+    pending_reason VARCHAR(50) NULL COMMENT 'insufficient_inventory | supplier_rejected | supplier_timeout | supplier_auth_failure | awaiting_supplier_delivery | custom_value_not_supported_yet | supplier_api_pending | requires_direct_topup_flow | delayed | delayed_needs_admin_decision | supplier_cancelled | supplier_integration_down | supplier_disabled | no_active_supplier_link',
     last_polled_at DATETIME NULL COMMENT 'Flow E poller — last getOrderInfoAndDetail check, drives the tiered poll cadence',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
@@ -641,6 +643,86 @@ CREATE TABLE IF NOT EXISTS system_settings (
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES
 ('default_margin_percent', '20', 'Applied to cost_price for a newly-synced SKU with no selling_price yet')
 ON DUPLICATE KEY UPDATE setting_key = setting_key;
+
+-- ============================================
+-- 23. SKU SUPPLIER LINKS (Master Plan §9 — multi-supplier normalization)
+-- ============================================
+-- products/product_skus are the canonical, supplier-agnostic catalog —
+-- this table is what actually ties a canonical SKU to one or more
+-- suppliers. With a single active supplier (WgCards today) every SKU has
+-- exactly one active link and the selection logic in §10 is trivially
+-- "use the only option" — it starts doing real work the moment a second
+-- supplier (Gift2Games) has confirmed links on the same SKU.
+CREATE TABLE IF NOT EXISTS sku_supplier_links (
+    link_id INT PRIMARY KEY AUTO_INCREMENT,
+    sku_id INT NOT NULL COMMENT 'Canonical product_skus.sku_id',
+    supplier VARCHAR(50) NOT NULL COMMENT 'wgcards | gift2games',
+    supplier_ref VARCHAR(100) NULL COMMENT 'Supplier item/product id (WgCards itemId, Gift2Games productId)',
+    supplier_sku_ref VARCHAR(100) NOT NULL COMMENT 'Supplier sku id — the stable key a link is matched on after first confirmation',
+    cost_price DECIMAL(10,2) NOT NULL,
+    cost_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    cost_price_base_currency DECIMAL(10,2) NULL COMMENT 'cost_price converted to the base reporting currency (USD) — what cheapest-supplier comparison actually sorts on',
+    fx_rate_used DECIMAL(12,6) NULL,
+    fx_rate_at DATETIME NULL,
+    stock_status ENUM('in_stock', 'out_of_stock', 'unknown') NOT NULL DEFAULT 'unknown',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    admin_priority_override ENUM('always_prefer', 'never_use') NULL,
+    last_synced_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (sku_id) REFERENCES product_skus(sku_id) ON DELETE CASCADE,
+    UNIQUE INDEX idx_supplier_sku_ref (supplier, supplier_sku_ref),
+    INDEX idx_sku_id (sku_id),
+    INDEX idx_supplier (supplier),
+    INDEX idx_is_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- 24. BRAND ALIASES (Master Plan §9.3 — matching key normalization)
+-- ============================================
+-- "Steam" / "Steam Wallet" / "Steam Gift Card" all need to resolve to one
+-- brand key before two suppliers' catalog items can be compared for a
+-- match — exact string matching on brand_name would never link anything.
+CREATE TABLE IF NOT EXISTS brand_aliases (
+    alias_id INT PRIMARY KEY AUTO_INCREMENT,
+    alias VARCHAR(255) NOT NULL COMMENT 'Raw brand string as a supplier sends it',
+    canonical_brand VARCHAR(255) NOT NULL COMMENT 'Normalized brand key used in the matching key',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE INDEX idx_alias (alias)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
+-- 25. SUPPLIER CATALOG ITEMS (Master Plan §9.2 — admin-confirmed matching)
+-- ============================================
+-- Staging area for catalog sync items that haven't been linked to a
+-- canonical SKU yet. A match is always admin-confirmed, never automatic —
+-- catalog sync only ever SUGGESTS a match here (suggested_sku_id), it
+-- never creates or updates a sku_supplier_links row on its own.
+CREATE TABLE IF NOT EXISTS supplier_catalog_items (
+    staging_id INT PRIMARY KEY AUTO_INCREMENT,
+    supplier VARCHAR(50) NOT NULL,
+    supplier_ref VARCHAR(100) NULL,
+    supplier_sku_ref VARCHAR(100) NOT NULL,
+    item_name VARCHAR(255) NOT NULL,
+    brand_name VARCHAR(255) NULL,
+    face_value DECIMAL(10,2) NULL,
+    currency VARCHAR(3) NULL,
+    region VARCHAR(50) NULL,
+    cost_price DECIMAL(10,2) NULL,
+    match_key VARCHAR(255) NULL COMMENT 'Normalized brand+face_value+currency+region key used to suggest a match',
+    suggested_sku_id INT NULL COMMENT 'Canonical product_skus.sku_id this item was auto-suggested to match, if any',
+    status ENUM('pending_review', 'linked', 'created_new', 'rejected', 'ignored') NOT NULL DEFAULT 'pending_review',
+    reviewed_by INT NULL,
+    reviewed_at DATETIME NULL,
+    raw_payload JSON NULL COMMENT 'Full catalog item as received from the supplier, for admin inspection',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (suggested_sku_id) REFERENCES product_skus(sku_id) ON DELETE SET NULL,
+    FOREIGN KEY (reviewed_by) REFERENCES users(user_id) ON DELETE SET NULL,
+    UNIQUE INDEX idx_supplier_item (supplier, supplier_sku_ref),
+    INDEX idx_status (status),
+    INDEX idx_match_key (match_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
 -- INITIAL DATA
