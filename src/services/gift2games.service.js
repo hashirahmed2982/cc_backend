@@ -130,9 +130,23 @@ class Gift2GamesService {
    * whatever call you're already making rather than a dedicated call each
    * time, per the master plan's own note; this is still provided as the
    * dedicated fallback for a quiet period with no other activity, same
-   * role healthCheck.js gives WgCards' getAccount(). */
+   * role healthCheck.js gives WgCards' getAccount().
+   *
+   * CONFIRMED LIVE (first-ever real call): Gift2Games returns HTTP 200
+   * even for a rejected login — {status:0, erorrCode:"login_unsuccessful",
+   * message:"Incorrect Login"} — _authedCall's HTTP-status-only checks
+   * never see this as a failure at all, so it's checked explicitly here.
+   * Not yet confirmed whether this {status,erorrCode} envelope is
+   * universal across every Gift2Games endpoint or specific to
+   * check_balance — createOrder's own success/failure shape (orderStatus)
+   * is checked separately in createOrder() below; revisit both once
+   * getProducts/createOrder have been exercised live too. */
   async checkBalance() {
-    return this._authedCall('/check_balance', {}, { method: 'GET' });
+    const result = await this._authedCall('/check_balance', {}, { method: 'GET' });
+    if (result && result.status === 0) {
+      throw new SupplierAuthError(`Gift2Games check_balance: ${result.message || result.erorrCode || 'login rejected'}`);
+    }
+    return result;
   }
 
   /** getProducts — Flow B2. cost is read from the 'price' field, NOT

@@ -31,6 +31,19 @@ describe('Gift2GamesService', () => {
     expect(call.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
   });
 
+  test('checkBalance: HTTP 200 with {status:0, erorrCode} (a rejected login, confirmed live) throws SupplierAuthError rather than reporting success', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue(CFG);
+    axios.request.mockResolvedValueOnce({
+      status: 200,
+      data: { status: 0, erorrCode: 'login_unsuccessful', message: 'Incorrect Login' },
+    });
+
+    await expect(gift2gamesService.checkBalance()).rejects.toMatchObject({
+      code: 'supplier_auth_failure',
+      message: expect.stringContaining('Incorrect Login'),
+    });
+  });
+
   test('401 -> SupplierAuthError, no retry built in here (that policy lives in the fulfillment module)', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValue(CFG);
     axios.request.mockResolvedValueOnce({ status: 401, data: {} });
