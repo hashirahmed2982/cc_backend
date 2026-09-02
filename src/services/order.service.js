@@ -276,119 +276,20 @@ class OrderService {
     const pendingItems = [];
 
     for (const item of resolvedItems) {
-      // products.source alone used to decide this — but Master Plan §9/§10's
-      // confirmLink can attach a supplier option to an INTERNAL product too
-      // (an admin linking WgCards/Gift2Games catalog items to an existing
-      // internal product), and confirmLink never touches products.source.
-      // Without this, that product's order would silently take the
-      // local-inventory path below, find zero manually-uploaded codes, and
-      // sit "insufficient_inventory" forever — never even attempting the
-      // suppliers that were just linked to it. Only queries
-      // sku_supplier_links when source is 'internal' — a pure
-      // supplier-sourced item never needed this check to begin with.
-      let hasSupplierOption = item.source !== 'internal';
-      if (!hasSupplierOption) {
-        const activeLinks = await supplierLinksRepo.getActiveLinksForSku(item.skuId);
-        hasSupplierOption = activeLinks.length > 0;
-      }
-
-      if (hasSupplierOption) {
-        // Flow D, supplier branch (Phase 4, generalized in Phase 8 to
-        // Master Plan §10's multi-supplier selection). Deliberately NOT
-        // checking local digital_codes first here — unlike the doc's
-        // fully-generic hybrid model, this codebase ties fulfillment to one
-        // exclusive path per line: if ANY supplier is linked, that's tried
-        // first and exclusively — a manually-uploaded local code sitting
-        // alongside an active supplier link is NOT used as a fallback (or
-        // preferred) today. Flag this to the client if a product is ever
-        // meant to sell from both local stock AND a linked supplier at once.
-        let result = await supplierSelection.selectAndFulfill({
-          orderId,
-          item: { skuId: item.skuId, quantity: item.quantity },
-          currency,
-        });
-
-        // Safety net for the deploy window before
-        // scripts/backfill-sku-supplier-links.js has been run against an
-        // existing DB: a WgCards product with no sku_supplier_links row
-        // yet falls straight back to the pre-Phase-8 direct call rather
-        // than silently stop fulfilling orders. Once the backfill runs
-        // every WgCards SKU has a link and this branch stops firing.
-        if (!result.success && result.reason === 'no_active_supplier_link' && item.source === 'wgcards') {
-          logger.warn(`order.service: sku ${item.skuId} has no sku_supplier_links row yet — falling back to direct WgCards fulfillment. Run scripts/backfill-sku-supplier-links.js.`);
-          result = await wgcardsFulfillment.attemptWgCardsFulfillment({
-            orderId,
-            item: { skuId: item.skuId, quantity: item.quantity },
-            currency,
-          });
-        }
-
-        if (result.success) {
-          // Gift2Games can answer synchronously (see gift2gamesFulfillment.js's
-          // header) — result.delivered+result.codes means the code is
-          // already written to digital_codes and order_details.delivered_qty
-          // is already bumped, so this line reports as fulfilled right away
-          // instead of waiting on a poller that would never see anything
-          // "new" happen. WgCards (and an async Gift2Games product) never
-          // sets result.delivered, so this is a no-op change for them —
-          // still falls straight to the pending branch below exactly as
-          // before.
-          const deliveredCount = (result.delivered && Array.isArray(result.codes)) ? result.codes.length : 0;
-
-          if (deliveredCount > 0) {
-            fulfilledItems.push({
-              productId: item.productId,
-              productName: item.productName,
-              skuId: item.skuId,
-              quantity: item.quantity,
-              delivered: deliveredCount,
-              codes: result.codes,
-            });
-          }
-
-          if (deliveredCount < item.quantity) {
-            // Flow E's poller (WgCards) / Flow E-equivalent gift2gamesOrderPoller.js
-            // (Gift2Games) is what delivers the rest from here. Until then
-            // the remainder correctly sits as pending/processing.
-            pendingItems.push({
-              productId: item.productId,
-              productName: item.productName,
-              skuId: item.skuId,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              delivered: deliveredCount,
-              pending: item.quantity - deliveredCount,
-              // 'insufficient_inventory' is the internal-stock-shortage
-              // reason (see below) — this is a different case: the
-              // supplier delivered fewer units than ordered in one call
-              // (Gift2Games' createOrder has no quantity/buyNum parameter,
-              // see gift2gamesFulfillment.js), so it gets its own label.
-              reason: deliveredCount > 0 ? 'supplier_partial_delivery' : 'awaiting_supplier_delivery',
-              supplierOrderId: result.wgcardsOrderId || result.gift2gamesOrderId || null,
-            });
-          }
-        } else {
-          pendingItems.push({
-            productId: item.productId,
-            productName: item.productName,
-            skuId: item.skuId,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            delivered: 0,
-            pending: item.quantity,
-            reason: result.reason,
-          });
-        }
-        continue;
-      }
-
+      // Local stock always gets first crack at the line, REGARDLESS of
+      // source — a pure supplier-sourced product simply has zero rows here
+      // (nobody manually uploads codes for an API-fulfilled product) so
+      // this is a cheap no-op for it, but an internal product that also has
+      // a supplier linked (Master Plan §9/§10's confirmLink) sells its own
+      // stock first and only reaches for the supplier for whatever's short.
       const codes = await db.query(
         `SELECT code_id, code FROM digital_codes
         WHERE sku_id = ? AND status = 'available' LIMIT ?`,
         [item.skuId, item.quantity]
       );
       const allocated = codes.slice(0, item.quantity);
-      const needed = item.quantity - allocated.length;
+      let delivered = 0;
+      let deliveredCodes = [];
 
       if (allocated.length > 0) {
         const codeIds = allocated.map(c => c.code_id);
@@ -408,26 +309,106 @@ class OrderService {
           WHERE order_id = ? AND sku_id = ?`,
           [allocated.length, orderId, item.skuId]
         );
+        delivered = allocated.length;
+        deliveredCodes = allocated.map(c => decrypt(c.code));
+      }
+
+      let remaining = item.quantity - delivered;
+      let pendingReason = null;
+      let supplierOrderId = null;
+
+      // Only reach for a supplier when local stock didn't cover the whole
+      // line. products.source alone can't decide "is a supplier available"
+      // — confirmLink never touches that column, so an internal product
+      // with a linked supplier still needs sku_supplier_links checked.
+      if (remaining > 0) {
+        let hasSupplierOption = item.source !== 'internal';
+        if (!hasSupplierOption) {
+          const activeLinks = await supplierLinksRepo.getActiveLinksForSku(item.skuId);
+          hasSupplierOption = activeLinks.length > 0;
+        }
+
+        if (hasSupplierOption) {
+          // Flow D, supplier branch (Phase 4, generalized in Phase 8 to
+          // Master Plan §10's multi-supplier selection) — requested for
+          // exactly what local stock didn't cover, not the original full
+          // quantity.
+          let result = await supplierSelection.selectAndFulfill({
+            orderId,
+            item: { skuId: item.skuId, quantity: remaining },
+            currency,
+          });
+
+          // Safety net for the deploy window before
+          // scripts/backfill-sku-supplier-links.js has been run against an
+          // existing DB: a WgCards product with no sku_supplier_links row
+          // yet falls straight back to the pre-Phase-8 direct call rather
+          // than silently stop fulfilling orders. Once the backfill runs
+          // every WgCards SKU has a link and this branch stops firing.
+          if (!result.success && result.reason === 'no_active_supplier_link' && item.source === 'wgcards') {
+            logger.warn(`order.service: sku ${item.skuId} has no sku_supplier_links row yet — falling back to direct WgCards fulfillment. Run scripts/backfill-sku-supplier-links.js.`);
+            result = await wgcardsFulfillment.attemptWgCardsFulfillment({
+              orderId,
+              item: { skuId: item.skuId, quantity: remaining },
+              currency,
+            });
+          }
+
+          if (result.success) {
+            // Gift2Games can answer synchronously (see gift2gamesFulfillment.js's
+            // header) — result.delivered+result.codes means the code is
+            // already written to digital_codes and order_details.delivered_qty
+            // is already bumped, so this line reports as fulfilled right
+            // away instead of waiting on a poller that would never see
+            // anything "new" happen. WgCards (and an async Gift2Games
+            // product) never sets result.delivered, so this is a no-op for
+            // them — falls straight to the pending branch below.
+            const supplierDelivered = (result.delivered && Array.isArray(result.codes)) ? result.codes.length : 0;
+            if (supplierDelivered > 0) {
+              delivered += supplierDelivered;
+              deliveredCodes = deliveredCodes.concat(result.codes);
+            }
+            remaining -= supplierDelivered;
+            supplierOrderId = result.wgcardsOrderId || result.gift2gamesOrderId || null;
+            if (remaining > 0) {
+              // Flow E's poller (WgCards) / Flow E-equivalent
+              // gift2gamesOrderPoller.js (Gift2Games) delivers the rest
+              // from here. 'insufficient_inventory' (below) is the
+              // local-stock-shortage reason — this is a different case:
+              // the supplier delivered fewer units than requested in one
+              // call (Gift2Games' createOrder has no quantity/buyNum
+              // parameter, see gift2gamesFulfillment.js), so it gets its
+              // own label.
+              pendingReason = supplierDelivered > 0 ? 'supplier_partial_delivery' : 'awaiting_supplier_delivery';
+            }
+          } else {
+            pendingReason = result.reason;
+          }
+        }
+      }
+
+      if (delivered > 0) {
         fulfilledItems.push({
           productId: item.productId,
           productName: item.productName,
           skuId: item.skuId,
           quantity: item.quantity,
-          delivered: allocated.length,
-          codes: allocated.map(c => decrypt(c.code)),
+          delivered,
+          codes: deliveredCodes,
         });
       }
 
-      if (needed > 0) {
+      if (remaining > 0) {
         pendingItems.push({
           productId: item.productId,
           productName: item.productName,
           skuId: item.skuId,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
-          delivered: allocated.length,
-          pending: needed,
-          reason: 'insufficient_inventory',
+          delivered,
+          pending: remaining,
+          reason: pendingReason || 'insufficient_inventory',
+          supplierOrderId,
         });
       }
     }
