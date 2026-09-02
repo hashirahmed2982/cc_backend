@@ -13,6 +13,7 @@
     "migrate:multi-supplier": "node src/migrations/migrate.js 012_multi_supplier_framework.sql",
     "migrate:widen-credentials": "node src/migrations/migrate.js 013_widen_supplier_credentials.sql",
     "migrate:widen-api-logs": "node src/migrations/migrate.js 014_widen_api_logs.sql",
+    "migrate:gift2games-delivery": "node src/migrations/migrate.js 015_gift2games_delivery.sql",
     "seed": "node src/migrations/seed.js",
     "seed:wgcards": "node src/migrations/seed_wgcards_config.js",
     "seed:gift2games": "node src/migrations/seed_gift2games_config.js",
