@@ -295,16 +295,20 @@ class WgCardsService {
 
   /**
    * getOrderInfoAndDetail — Flow E: order status + line-level delivery
-   * detail. NOTE: as of this writing this endpoint consistently rejects
-   * every payload variant we've tried (correct/typo'd userId spelling,
-   * with/without accountId, with/without size, orderId vs serviceOrder)
-   * with a generic {code:400,msg:"bad request",appId:null} — reported to
-   * WgCards, unresolved. jobs/orderPoller.js falls back to getOrderInfo's
-   * list when this throws a SupplierBusinessError.
+   * detail. Previously consistently rejected every payload variant tried
+   * (correct/typo'd userId spelling, with/without accountId, with/without
+   * size, orderId vs serviceOrder) with a generic {code:400,msg:"bad
+   * request",appId:null} — reported to WgCards. Vendor's reply: this
+   * endpoint does NOT take pagination parameters at all — current/size
+   * were themselves the "bad request", not any of the other variants
+   * tried. jobs/orderPoller.js still falls back to getOrderInfo's list
+   * when this throws a SupplierBusinessError, in case of any other
+   * still-unknown rejection reason — that fallback path is unaffected by
+   * this fix either way.
    */
-  async getOrderInfoAndDetail({ orderId, current = 1, size = 200 }) {
+  async getOrderInfoAndDetail({ orderId }) {
     const cfg = await this._config();
-    return this._authedCall('/api/getOrderInfoAndDetail', { userId: cfg.app_id, orderId, current, size });
+    return this._authedCall('/api/getOrderInfoAndDetail', { userId: cfg.app_id, orderId });
   }
 
   /** getBuyCard — Flow E: fetch delivered card/pin/sn once deliveryStatus is 2 or 3. */
