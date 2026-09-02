@@ -120,11 +120,20 @@ async function createNewFromStaging({ stagingId, reviewedBy, sellingPrice, categ
   try {
     await conn.beginTransaction();
 
+    // spu_id is WgCards' own legacy identity column — catalogSync.js looks
+    // a product up by (spu_id, source='wgcards') to decide "is this a
+    // known item" on every future sync. Leaving it NULL here would make
+    // this exact product look unrecognized again on the very next sync,
+    // re-staging it forever. Only meaningful for wgcards; NULL for any
+    // other supplier, same as it always was for a product created any
+    // other way.
+    const spuId = item.supplier === 'wgcards' ? item.supplier_ref : null;
+
     const [pr] = await conn.execute(
       `INSERT INTO products
-         (product_name, brand_name, category, is_active, source, supplier_name, supplier_ref, sync_enabled)
-       VALUES (?, ?, ?, 0, ?, ?, ?, 1)`,
-      [item.item_name, item.brand_name || null, category || null, item.supplier, item.supplier, item.supplier_ref || null]
+         (product_name, brand_name, category, is_active, source, supplier_name, supplier_ref, spu_id, sync_enabled)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1)`,
+      [item.item_name, item.brand_name || null, category || null, item.supplier, item.supplier, item.supplier_ref || null, spuId]
     );
     productId = pr.insertId;
 
@@ -162,12 +171,20 @@ async function createNewFromStaging({ stagingId, reviewedBy, sellingPrice, categ
       }
     }
 
+    // wgcards_sku_id is the OTHER legacy column wgcardsFulfillment.js reads
+    // directly (it doesn't know about sku_supplier_links at all — see its
+    // own SKU lookup) to know which WgCards SKU to actually place an order
+    // against. Leaving this NULL for a wgcards-sourced product would make
+    // it look unrecognized ("not_a_wgcards_sku") at checkout despite the
+    // product being real and linked.
+    const wgcardsSkuId = item.supplier === 'wgcards' ? item.supplier_sku_ref : null;
+
     const [sr] = await conn.execute(
       `INSERT INTO product_skus
-         (product_id, sku_name, supplier_sku_ref, face_value, cost_price, selling_price,
+         (product_id, sku_name, supplier_sku_ref, wgcards_sku_id, face_value, cost_price, selling_price,
           price_currency, needs_review, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      [productId, item.item_name, item.supplier_sku_ref, item.face_value, costPrice, finalSellingPrice, currency, needsReview ? 1 : 0]
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      [productId, item.item_name, item.supplier_sku_ref, wgcardsSkuId, item.face_value, costPrice, finalSellingPrice, currency, needsReview ? 1 : 0]
     );
     skuId = sr.insertId;
 

@@ -192,6 +192,34 @@ describe('createNewFromStaging', () => {
     const skuInsertArgs = conn.execute.mock.calls[1][1];
     expect(skuInsertArgs).toContain(1); // needs_review forced true despite an explicit price
   });
+
+  test('a wgcards-sourced staged item gets spu_id/wgcards_sku_id backfilled — otherwise catalogSync.js would re-stage it forever and wgcardsFulfillment.js could never place an order for it', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce({
+      ...stagingItem, supplier: 'wgcards', supplier_ref: '9001', supplier_sku_ref: '12182768136',
+    });
+    const conn = fakeConn([[{ insertId: 100 }], [{ insertId: 200 }], [{}]]);
+    db.getConnection.mockResolvedValueOnce(conn);
+
+    await createNewFromStaging({ stagingId: 5, reviewedBy: 7, sellingPrice: 5 });
+
+    const productInsertArgs = conn.execute.mock.calls[0][1];
+    expect(productInsertArgs).toContain('9001'); // spu_id
+    const skuInsertArgs = conn.execute.mock.calls[1][1];
+    expect(skuInsertArgs).toContain('12182768136'); // wgcards_sku_id
+  });
+
+  test('a gift2games-sourced staged item leaves spu_id/wgcards_sku_id NULL', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce(stagingItem); // supplier: 'gift2games'
+    const conn = fakeConn([[{ insertId: 100 }], [{ insertId: 200 }], [{}]]);
+    db.getConnection.mockResolvedValueOnce(conn);
+
+    await createNewFromStaging({ stagingId: 5, reviewedBy: 7, sellingPrice: 5 });
+
+    const productInsertArgs = conn.execute.mock.calls[0][1];
+    expect(productInsertArgs[productInsertArgs.length - 1]).toBeNull(); // spu_id is the last bound param, NOT item.supplier_ref
+    const skuInsertArgs = conn.execute.mock.calls[1][1];
+    expect(skuInsertArgs[3]).toBeNull(); // wgcards_sku_id is the 4th bound param (after productId, sku_name, supplier_sku_ref)
+  });
 });
 
 describe('ignoreStaging', () => {

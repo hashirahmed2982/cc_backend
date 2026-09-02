@@ -7,7 +7,33 @@ jest.mock('../../config/database');
 const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
 const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
 const db = require('../../config/database');
-const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, syncOneItem } = require('../catalogSync');
+const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, buildMatchKey, syncOneItem } = require('../catalogSync');
+
+describe('buildMatchKey', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('combines canonical brand, face value, and currency — using itemBrandName directly, no title-splitting needed', async () => {
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('mobile legends');
+    const key = await buildMatchKey(
+      { itemBrandName: 'Mobile Legends', itemName: 'MLBB 11 Diamonds' },
+      { faceValue: 11, priceCurrency: 'usd' }
+    );
+    expect(key).toBe('mobile legends|11.00|USD');
+    expect(supplierLinksRepo.getCanonicalBrand).toHaveBeenCalledWith('Mobile Legends');
+  });
+
+  test('falls back to itemName when itemBrandName is missing', async () => {
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('some game');
+    await buildMatchKey({ itemBrandName: null, itemName: 'Some Game' }, { faceValue: 5, priceCurrency: 'USD' });
+    expect(supplierLinksRepo.getCanonicalBrand).toHaveBeenCalledWith('Some Game');
+  });
+
+  test('a custom-value (range) sku with no single face value keys on "na"', async () => {
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('topup game');
+    const key = await buildMatchKey({ itemBrandName: 'Topup Game' }, { faceValue: null, priceCurrency: 'USD' });
+    expect(key).toBe('topup game|na|USD');
+  });
+});
 
 describe('catalogSync pure mapping', () => {
   describe('mapFaceValue', () => {
@@ -110,20 +136,12 @@ describe('catalogSync.run', () => {
   });
 });
 
-describe('catalogSync.syncOneItem — sku_supplier_links wiring (Master Plan §9/§10)', () => {
-  // A fake connection that answers whichever query upsertProduct/upsertSku/
-  // ensureInventoryRow happen to run, keyed on the SQL text rather than
-  // call order — robust to those functions' own internal query order
-  // changing without this test needing to track it.
+describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (no more bypassing it)', () => {
   function fakeConn() {
     return {
       execute: jest.fn(async (sql) => {
-        if (/SELECT product_id FROM products/.test(sql)) return [[]]; // no existing product -> INSERT path
-        if (/INSERT INTO products/.test(sql)) return [{ insertId: 501 }];
-        if (/UPDATE products SET/.test(sql)) return [{}];
-        if (/SELECT sku_id, selling_price FROM product_skus/.test(sql)) return [[]]; // no existing sku -> INSERT path
-        if (/INSERT INTO product_skus/.test(sql)) return [{ insertId: 9001 }];
         if (/UPDATE product_skus SET/.test(sql)) return [{}];
+        if (/INSERT INTO product_skus/.test(sql)) return [{ insertId: 9001 }];
         if (/SELECT inventory_id FROM inventory/.test(sql)) return [[]];
         if (/INSERT INTO inventory/.test(sql)) return [{}];
         return [{}];
@@ -134,59 +152,124 @@ describe('catalogSync.syncOneItem — sku_supplier_links wiring (Master Plan §9
   const itemRaw = {
     itemId: '77',
     itemName: 'Test Item',
+    itemBrandName: 'Test Brand',
     skus: [{ skuId: '12345', skuName: 'Test SKU', minFaceValue: 10, maxFaceValue: 10, skuPrice: 8, skuPriceCurrency: 'USD' }],
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
     db.transaction.mockImplementation(async (cb) => cb(fakeConn()));
+    supplierLinksRepo.getCanonicalBrand.mockImplementation(async (b) => (b || '').toLowerCase());
   });
 
-  test('a newly-synced SKU gets a sku_supplier_links row — the gap this fix closes (WgCards used to bypass it entirely)', async () => {
+  test('genuinely new item, unlinked sku -> staged for review, product/sku tables never touched', async () => {
+    db.queryOne.mockResolvedValueOnce(null); // findAndRefreshProduct: no existing product
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    db.queryOne.mockResolvedValueOnce(null); // no product_sku by wgcards_sku_id either
+    supplierLinksRepo.getStagingItemBySupplierRef.mockResolvedValueOnce(null);
+
     const result = await syncOneItem(itemRaw, 20);
 
-    expect(result).toMatchObject({ productId: 501, created: 1, updated: 0, totalSkus: 1 });
-    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledTimes(1);
-    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skuId: 9001,
-        supplier: 'wgcards',
-        supplierSkuRef: '12345',
-        costPrice: 8,
-        costCurrency: 'USD',
-        stockStatus: 'unknown',
-      })
+    expect(result.outcomes).toMatchObject({ newly_staged: 1, link_refreshed: 0, sku_added: 0, topup_skipped: 0 });
+    expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalledWith(
+      expect.objectContaining({ supplier: 'wgcards', supplierRef: '77', supplierSkuRef: '12345', itemName: 'Test Item', costPrice: 8 })
     );
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
   });
 
-  test('a non-USD sku still syncs (no margin-inflated price) and its link is recorded in its real currency', async () => {
-    const cnyItem = {
-      itemId: '77',
-      itemName: 'Test Item',
-      skus: [{ skuId: '12345', skuName: 'Test SKU', minFaceValue: 10, maxFaceValue: 10, skuPrice: 41.39, skuPriceCurrency: 'CNY' }],
-    };
+  test('genuinely new item that is Direct Top-Up -> skipped entirely, never staged (client decision: never sold)', async () => {
+    db.queryOne.mockResolvedValueOnce(null);
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    db.queryOne.mockResolvedValueOnce(null);
+
+    const result = await syncOneItem({ ...itemRaw, spuType: 5 }, 20);
+
+    expect(result.outcomes).toMatchObject({ topup_skipped: 1, newly_staged: 0 });
+    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
+  });
+
+  test('already linked -> refreshes product_skus + the link, no staging at all', async () => {
+    db.queryOne.mockResolvedValueOnce({ product_id: 501 }); // findAndRefreshProduct finds it
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce({ sku_id: 9001 });
+
+    const result = await syncOneItem(itemRaw, 20);
+
+    expect(result.outcomes).toMatchObject({ link_refreshed: 1 });
+    expect(db.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE products SET'), expect.any(Array));
+    expect(db.transaction).toHaveBeenCalledTimes(1); // the UPDATE product_skus + inventory-ensure transaction
+    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(expect.objectContaining({ skuId: 9001, supplier: 'wgcards' }));
+    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
+  });
+
+  test('product_sku already exists but its link row is missing -> backfills the link, does NOT stage (avoids a duplicate product)', async () => {
+    db.queryOne.mockResolvedValueOnce(null); // no product found by spu_id (a pre-existing data gap)
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    db.queryOne.mockResolvedValueOnce({ sku_id: 9001 }); // but the product_sku itself already exists
+
+    const result = await syncOneItem(itemRaw, 20);
+
+    expect(result.outcomes).toMatchObject({ link_backfilled: 1, newly_staged: 0 });
+    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(expect.objectContaining({ skuId: 9001 }));
+    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
+  });
+
+  test('a new denomination on an already-known item -> added directly, no review needed', async () => {
+    db.queryOne.mockResolvedValueOnce({ product_id: 501 }); // the ITEM is already known
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    db.queryOne.mockResolvedValueOnce(null); // but THIS sku hasn't been seen before
+
+    const result = await syncOneItem(itemRaw, 20);
+
+    expect(result.outcomes).toMatchObject({ sku_added: 1, newly_staged: 0 });
+    expect(db.transaction).toHaveBeenCalledTimes(1); // the INSERT product_skus + inventory-ensure transaction
+    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(expect.objectContaining({ skuId: 9001 }));
+    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
+  });
+
+  test('a non-USD sku still syncs (no margin-inflated price) when staged, recorded in its real currency', async () => {
+    const cnyItem = { ...itemRaw, skus: [{ ...itemRaw.skus[0], skuPrice: 41.39, skuPriceCurrency: 'CNY' }] };
+    db.queryOne.mockResolvedValueOnce(null);
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    db.queryOne.mockResolvedValueOnce(null);
 
     const result = await syncOneItem(cnyItem, 20);
 
-    expect(result).toMatchObject({ productId: 501, created: 1 });
-    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(
-      expect.objectContaining({ costPrice: 41.39, costCurrency: 'CNY', costPriceBaseCurrency: null })
+    expect(result.outcomes.newly_staged).toBe(1);
+    expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalledWith(
+      expect.objectContaining({ costPrice: 41.39, currency: 'CNY' })
     );
   });
 
-  test('a link-sync failure is logged but does not fail the sync — the product/SKU data is already safely committed', async () => {
-    supplierLinksRepo.upsertLink.mockRejectedValueOnce(new Error('db blip'));
+  test('a SKU with no skuPrice is skipped entirely — never reaches the DB or staging', async () => {
+    db.queryOne.mockResolvedValueOnce(null); // findAndRefreshProduct
 
-    const result = await syncOneItem(itemRaw, 20);
-
-    expect(result).toMatchObject({ productId: 501, created: 1 });
-  });
-
-  test('a SKU with no skuPrice is skipped entirely — never reaches sku_supplier_links either', async () => {
     const result = await syncOneItem({ itemId: '77', skus: [{ skuId: '999' }] }, 20);
 
-    expect(result.totalSkus).toBe(1);
-    expect(result.created).toBe(0);
+    expect(result.outcomes.skipped_no_price).toBe(1);
     expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
+    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
+  });
+
+  test('one bad sku does not take down its siblings — recorded per-sku in errors, everything else still syncs', async () => {
+    const twoSkuItem = {
+      ...itemRaw,
+      skus: [
+        { skuId: '1', skuName: 'A', minFaceValue: 1, maxFaceValue: 1, skuPrice: 1, skuPriceCurrency: 'USD' },
+        { skuId: '2', skuName: 'B', minFaceValue: 2, maxFaceValue: 2, skuPrice: 2, skuPriceCurrency: 'USD' },
+      ],
+    };
+    db.queryOne.mockResolvedValueOnce({ product_id: 501 }); // item already known
+    supplierLinksRepo.getLinkBySupplierRef
+      .mockResolvedValueOnce({ sku_id: 111 }) // sku 1: already linked
+      .mockResolvedValueOnce({ sku_id: 222 }); // sku 2: already linked
+    supplierLinksRepo.upsertLink
+      .mockRejectedValueOnce(new Error('db blip')) // sku 1's link write fails
+      .mockResolvedValueOnce(undefined); // sku 2 succeeds
+
+    const result = await syncOneItem(twoSkuItem, 20);
+
+    expect(result.errors).toEqual([{ skuId: '1', error: 'db blip' }]);
+    expect(result.outcomes.link_refreshed).toBe(1); // only sku 2 counted as successful
   });
 });
