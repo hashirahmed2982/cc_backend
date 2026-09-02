@@ -6,7 +6,7 @@ jest.mock('../../repositories/supplierLinks.repository');
 const db = require('../../config/database');
 const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
 const {
-  buildCanonicalMatchKey, findSuggestedMatches, getStagingItemWithSuggestions,
+  buildCanonicalMatchKey, findSuggestedMatches, getStagingItemWithSuggestions, searchCanonicalProducts,
   confirmLink, createNewFromStaging, ignoreStaging,
 } = require('../catalogMatching.service');
 
@@ -54,6 +54,44 @@ describe('findSuggestedMatches', () => {
 
     const { matches } = await findSuggestedMatches(stagingItem);
     expect(matches).toEqual([]);
+  });
+});
+
+describe('searchCanonicalProducts', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('empty/whitespace query short-circuits to [] without touching the DB', async () => {
+    expect(await searchCanonicalProducts('')).toEqual([]);
+    expect(await searchCanonicalProducts('   ')).toEqual([]);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  test('wraps the query in % wildcards and searches name/brand/sku_name', async () => {
+    db.query.mockResolvedValueOnce([{ sku_id: 1, product_name: 'Mobile Legends 11 Diamonds' }]);
+
+    const results = await searchCanonicalProducts('mobile');
+
+    expect(results).toEqual([{ sku_id: 1, product_name: 'Mobile Legends 11 Diamonds' }]);
+    expect(db.query).toHaveBeenCalledWith(
+      expect.stringContaining('LIKE ?'),
+      expect.arrayContaining(['%mobile%'])
+    );
+  });
+
+  test('excludes Direct Top-Up products, same as everywhere else admin browses the catalog', async () => {
+    db.query.mockResolvedValueOnce([]);
+    await searchCanonicalProducts('valorant');
+    expect(db.query).toHaveBeenCalledWith(
+      expect.stringContaining('spu_type'),
+      expect.any(Array)
+    );
+  });
+
+  test('limit is clamped to a sane range', async () => {
+    db.query.mockResolvedValueOnce([]);
+    await searchCanonicalProducts('x', { limit: 9999 });
+    const params = db.query.mock.calls[0][1];
+    expect(params[params.length - 1]).toBe(100); // clamped down from 9999
   });
 });
 

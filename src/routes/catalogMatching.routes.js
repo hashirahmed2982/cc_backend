@@ -35,6 +35,25 @@ router.get('/catalog-matching/pending',
   }
 );
 
+// GET /api/v1/admin/catalog-matching/search?q=... — manual fallback search
+// across the canonical catalog, for when findSuggestedMatches' auto key
+// match finds nothing or suggests the wrong item. Registered BEFORE
+// /:stagingId below — Express matches routes in order, and "search" would
+// otherwise bind to :stagingId and fail its isInt() validator first.
+router.get('/catalog-matching/search',
+  [
+    query('q').isString().trim().isLength({ min: 1 }).withMessage('q is required'),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const results = await catalogMatching.searchCanonicalProducts(req.query.q, { limit: req.query.limit });
+      res.json({ success: true, data: results });
+    } catch (err) { next(err); }
+  }
+);
+
 // GET /api/v1/admin/catalog-matching/:stagingId — one staged item + suggested matches
 router.get('/catalog-matching/:stagingId',
   [param('stagingId').isInt({ gt: 0 })],

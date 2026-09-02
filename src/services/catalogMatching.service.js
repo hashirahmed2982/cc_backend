@@ -13,6 +13,7 @@ const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 const { computeDefaultSellingPrice } = require('../jobs/catalogSync');
 const { assertSellingPriceAboveCost } = require('../utils/priceGuard');
 const { AppError } = require('../middleware/errorHandler');
+const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 
 async function getDefaultMarginPercent() {
   const row = await db.queryOne("SELECT setting_value FROM system_settings WHERE setting_key = 'default_margin_percent'");
@@ -63,6 +64,34 @@ async function findSuggestedMatches(item, { limit = 5 } = {}) {
 
 async function getPendingReview(opts) {
   return supplierLinksRepo.getPendingReview(opts);
+}
+
+/**
+ * Manual fallback alongside findSuggestedMatches' auto-computed key match —
+ * for when the match key finds nothing (a brand spelling the alias table
+ * doesn't know yet) or suggests the wrong item. Free-text substring search
+ * across product name / brand / SKU name, same candidate shape
+ * findSuggestedMatches already returns so the review UI can render both
+ * lists identically. Same is_active=1 scope and Direct Top-Up exclusion as
+ * everywhere else a canonical product gets shown to an admin.
+ */
+async function searchCanonicalProducts(query, { limit = 20 } = {}) {
+  const q = (query || '').trim();
+  if (!q) return [];
+  const like = `%${q}%`;
+  const safeLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
+
+  return db.query(
+    `SELECT ps.sku_id, ps.sku_name, ps.face_value, ps.price_currency, ps.selling_price,
+            p.product_id, p.product_name, p.brand_name, p.source
+       FROM product_skus ps JOIN products p ON p.product_id = ps.product_id
+      WHERE ps.is_active = 1
+        AND (p.spu_type IS NULL OR p.spu_type != ?)
+        AND (p.product_name LIKE ? OR p.brand_name LIKE ? OR ps.sku_name LIKE ?)
+      ORDER BY p.product_name ASC
+      LIMIT ?`,
+    [DIRECT_TOPUP_SPU_TYPE, like, like, like, safeLimit]
+  );
 }
 
 async function getStagingItemWithSuggestions(stagingId) {
@@ -226,6 +255,6 @@ async function ignoreStaging({ stagingId, reviewedBy }) {
 }
 
 module.exports = {
-  buildCanonicalMatchKey, findSuggestedMatches, getPendingReview,
+  buildCanonicalMatchKey, findSuggestedMatches, getPendingReview, searchCanonicalProducts,
   getStagingItemWithSuggestions, confirmLink, createNewFromStaging, ignoreStaging,
 };
