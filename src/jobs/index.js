@@ -14,6 +14,10 @@ const healthCheck = require('./healthCheck');
 const balanceMonitor = require('./balanceMonitor');
 const wgcardsTopupReconciler = require('./wgcardsTopupReconciler');
 const gift2gamesCatalogSync = require('./gift2gamesCatalogSync');
+const gift2gamesOrderPoller = require('./gift2gamesOrderPoller');
+const gift2gamesStockSync = require('./gift2gamesStockSync');
+const gift2gamesHealthCheck = require('./gift2gamesHealthCheck');
+const gift2gamesBalanceMonitor = require('./gift2gamesBalanceMonitor');
 
 function guarded(name, fn) {
   return async () => {
@@ -74,6 +78,30 @@ function start() {
   // (jobs/_supplierGate.js) is per-supplier anyway.
   cron.schedule('0 */6 * * *', guarded('gift2gamesCatalogSync', () => gift2gamesCatalogSync.run()));
   logger.info('[cron] registered: gift2gamesCatalogSync (every 6h)');
+
+  // Job #4b — Gift2Games Order Completion Poller, every 5 min (Flow E
+  // counterpart to Job #4, for the minority of Gift2Games lines that
+  // don't deliver synchronously off createOrder's own response — see
+  // gift2gamesFulfillment.js's header). Same tiered-cadence-per-row
+  // pattern as orderPoller.js.
+  cron.schedule('*/5 * * * *', guarded('gift2gamesOrderPoller', () => gift2gamesOrderPoller.run()));
+  logger.info('[cron] registered: gift2gamesOrderPoller (every 5 min, tiered per-order cadence)');
+
+  // Job #2b — Gift2Games Stock Sync, every 60 min (Flow C counterpart —
+  // WgCards has had this since Phase 4; Gift2Games only had its 6h
+  // catalogSync doing this as a side effect until now).
+  cron.schedule('0 * * * *', guarded('gift2gamesStockSync', () => gift2gamesStockSync.run()));
+  logger.info('[cron] registered: gift2gamesStockSync (every 60 min)');
+
+  // Job #7b — Gift2Games Integration Health Check, every 15 min (Flow A/G
+  // circuit breaker heartbeat counterpart to Job #7).
+  cron.schedule('*/15 * * * *', guarded('gift2gamesHealthCheck', () => gift2gamesHealthCheck.run()));
+  logger.info('[cron] registered: gift2gamesHealthCheck (every 15 min)');
+
+  // Job #6b — Gift2Games Account Balance Monitor, every 30 min (Flow G
+  // counterpart to Job #6).
+  cron.schedule('*/30 * * * *', guarded('gift2gamesBalanceMonitor', () => gift2gamesBalanceMonitor.run()));
+  logger.info('[cron] registered: gift2gamesBalanceMonitor (every 30 min)');
 }
 
 module.exports = { start };

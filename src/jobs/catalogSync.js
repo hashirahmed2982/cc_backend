@@ -29,6 +29,7 @@ const logger = require('../utils/logger');
 const wgcardsService = require('../services/wgcards.service');
 const { checkSupplierEnabled } = require('./_supplierGate');
 const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
+const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 
 const PAGE_SIZE = 50;
 const PAGE_DELAY_MS = 1600; // keeps us under getItem's 40 calls/60s limit even for a large catalog
@@ -199,11 +200,12 @@ async function ensureInventoryRow(conn, skuId) {
 }
 
 async function syncOneItem(itemRaw, defaultMarginPercent) {
-  return db.transaction(async (conn) => {
+  const { productId, created, updated, totalSkus, linkedSkus } = await db.transaction(async (conn) => {
     const productId = await upsertProduct(conn, itemRaw);
     const skus = itemRaw.skus || itemRaw.skuList || [];
     let created = 0;
     let updated = 0;
+    const linkedSkus = [];
     for (const sku of skus) {
       if (sku.skuPrice === undefined) {
         logger.warn(`catalogSync: skipping sku ${sku.skuId} on item ${itemRaw.itemId} — no skuPrice in response`);
@@ -213,9 +215,44 @@ async function syncOneItem(itemRaw, defaultMarginPercent) {
       const { skuId, isNew } = await upsertSku(conn, productId, mapped);
       await ensureInventoryRow(conn, skuId);
       isNew ? created++ : updated++;
+      linkedSkus.push({ skuId, wgcardsSkuId: mapped.wgcardsSkuId, costPrice: mapped.costPrice, priceCurrency: mapped.priceCurrency });
     }
-    return { productId, created, updated, totalSkus: skus.length };
+    return { productId, created, updated, totalSkus: skus.length, linkedSkus };
   });
+
+  // §9/§10's sku_supplier_links, kept in sync on every regular catalog
+  // sync run — NOT inside the transaction above: supplierLinksRepo.upsertLink
+  // uses the shared pool (a different connection), so calling it before
+  // that transaction commits would block waiting on a lock the commit
+  // itself is what releases (a guaranteed hang). WgCards is the canonical
+  // source of its own catalog, unlike Gift2Games — so unlike
+  // gift2gamesCatalogSync.js's staging/matching workflow, every synced
+  // WgCards SKU is linked directly, no admin review needed. This is what
+  // scripts/backfill-sku-supplier-links.js used to be the ONLY way to get
+  // (a one-time catch-up); this makes it happen automatically going
+  // forward for every SKU the sync ever touches, new or existing.
+  for (const s of linkedSkus) {
+    try {
+      await supplierLinksRepo.upsertLink({
+        skuId: s.skuId,
+        supplier: 'wgcards',
+        supplierRef: String(itemRaw.itemId),
+        supplierSkuRef: s.wgcardsSkuId,
+        costPrice: s.costPrice,
+        costCurrency: s.priceCurrency,
+        costPriceBaseCurrency: (s.priceCurrency || 'USD').toUpperCase() === 'USD' ? s.costPrice : null,
+        stockStatus: 'unknown', // stockSync.js (Flow C, hourly) is the source of truth for this — never guessed here
+      });
+    } catch (err) {
+      // A link-sync failure must never fail the catalog sync itself — the
+      // product/SKU data is already safely committed above; worst case
+      // this SKU falls back to order.service.js's own no_active_supplier_link
+      // safety net until the next successful sync run retries the link.
+      logger.error(`catalogSync: failed to upsert sku_supplier_links for wgcards sku ${s.wgcardsSkuId} (sku_id ${s.skuId}):`, err);
+    }
+  }
+
+  return { productId, created, updated, totalSkus };
 }
 
 // ── Pagination driver ───────────────────────────────────────────────────
@@ -258,7 +295,7 @@ async function run({ pageSize = PAGE_SIZE } = {}) {
   return summary;
 }
 
-module.exports = { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert };
+module.exports = { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, syncOneItem };
 
 // ── CLI entry point ─────────────────────────────────────────────────────
 if (require.main === module) {

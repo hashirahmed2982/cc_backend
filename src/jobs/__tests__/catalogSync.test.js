@@ -1,9 +1,13 @@
 'use strict';
 
 jest.mock('../../repositories/supplierConfig.repository');
+jest.mock('../../repositories/supplierLinks.repository');
+jest.mock('../../config/database');
 
 const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
-const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert } = require('../catalogSync');
+const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
+const db = require('../../config/database');
+const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, syncOneItem } = require('../catalogSync');
 
 describe('catalogSync pure mapping', () => {
   describe('mapFaceValue', () => {
@@ -83,5 +87,71 @@ describe('catalogSync.run', () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 0 });
     const result = await run();
     expect(result).toEqual({ skipped: true, reason: 'supplier_disabled' });
+  });
+});
+
+describe('catalogSync.syncOneItem — sku_supplier_links wiring (Master Plan §9/§10)', () => {
+  // A fake connection that answers whichever query upsertProduct/upsertSku/
+  // ensureInventoryRow happen to run, keyed on the SQL text rather than
+  // call order — robust to those functions' own internal query order
+  // changing without this test needing to track it.
+  function fakeConn() {
+    return {
+      execute: jest.fn(async (sql) => {
+        if (/SELECT product_id FROM products/.test(sql)) return [[]]; // no existing product -> INSERT path
+        if (/INSERT INTO products/.test(sql)) return [{ insertId: 501 }];
+        if (/UPDATE products SET/.test(sql)) return [{}];
+        if (/SELECT sku_id, selling_price FROM product_skus/.test(sql)) return [[]]; // no existing sku -> INSERT path
+        if (/INSERT INTO product_skus/.test(sql)) return [{ insertId: 9001 }];
+        if (/UPDATE product_skus SET/.test(sql)) return [{}];
+        if (/SELECT inventory_id FROM inventory/.test(sql)) return [[]];
+        if (/INSERT INTO inventory/.test(sql)) return [{}];
+        return [{}];
+      }),
+    };
+  }
+
+  const itemRaw = {
+    itemId: '77',
+    itemName: 'Test Item',
+    skus: [{ skuId: '12345', skuName: 'Test SKU', minFaceValue: 10, maxFaceValue: 10, skuPrice: 8, skuPriceCurrency: 'USD' }],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    db.transaction.mockImplementation(async (cb) => cb(fakeConn()));
+  });
+
+  test('a newly-synced SKU gets a sku_supplier_links row — the gap this fix closes (WgCards used to bypass it entirely)', async () => {
+    const result = await syncOneItem(itemRaw, 20);
+
+    expect(result).toMatchObject({ productId: 501, created: 1, updated: 0, totalSkus: 1 });
+    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledTimes(1);
+    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skuId: 9001,
+        supplier: 'wgcards',
+        supplierSkuRef: '12345',
+        costPrice: 8,
+        costCurrency: 'USD',
+        stockStatus: 'unknown',
+      })
+    );
+  });
+
+  test('a link-sync failure is logged but does not fail the sync — the product/SKU data is already safely committed', async () => {
+    supplierLinksRepo.upsertLink.mockRejectedValueOnce(new Error('db blip'));
+
+    const result = await syncOneItem(itemRaw, 20);
+
+    expect(result).toMatchObject({ productId: 501, created: 1 });
+  });
+
+  test('a SKU with no skuPrice is skipped entirely — never reaches sku_supplier_links either', async () => {
+    const result = await syncOneItem({ itemId: '77', skus: [{ skuId: '999' }] }, 20);
+
+    expect(result.totalSkus).toBe(1);
+    expect(result.created).toBe(0);
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
   });
 });

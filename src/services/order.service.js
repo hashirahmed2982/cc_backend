@@ -305,20 +305,49 @@ class OrderService {
         }
 
         if (result.success) {
-          // Order placed (or already was) — Flow E's poller is what
-          // actually delivers the code and marks this delivered. Until
-          // then it correctly sits as pending/processing.
-          pendingItems.push({
-            productId: item.productId,
-            productName: item.productName,
-            skuId: item.skuId,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            delivered: 0,
-            pending: item.quantity,
-            reason: 'awaiting_supplier_delivery',
-            supplierOrderId: result.wgcardsOrderId || result.gift2gamesOrderId || null,
-          });
+          // Gift2Games can answer synchronously (see gift2gamesFulfillment.js's
+          // header) — result.delivered+result.codes means the code is
+          // already written to digital_codes and order_details.delivered_qty
+          // is already bumped, so this line reports as fulfilled right away
+          // instead of waiting on a poller that would never see anything
+          // "new" happen. WgCards (and an async Gift2Games product) never
+          // sets result.delivered, so this is a no-op change for them —
+          // still falls straight to the pending branch below exactly as
+          // before.
+          const deliveredCount = (result.delivered && Array.isArray(result.codes)) ? result.codes.length : 0;
+
+          if (deliveredCount > 0) {
+            fulfilledItems.push({
+              productId: item.productId,
+              productName: item.productName,
+              skuId: item.skuId,
+              quantity: item.quantity,
+              delivered: deliveredCount,
+              codes: result.codes,
+            });
+          }
+
+          if (deliveredCount < item.quantity) {
+            // Flow E's poller (WgCards) / Flow E-equivalent gift2gamesOrderPoller.js
+            // (Gift2Games) is what delivers the rest from here. Until then
+            // the remainder correctly sits as pending/processing.
+            pendingItems.push({
+              productId: item.productId,
+              productName: item.productName,
+              skuId: item.skuId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              delivered: deliveredCount,
+              pending: item.quantity - deliveredCount,
+              // 'insufficient_inventory' is the internal-stock-shortage
+              // reason (see below) — this is a different case: the
+              // supplier delivered fewer units than ordered in one call
+              // (Gift2Games' createOrder has no quantity/buyNum parameter,
+              // see gift2gamesFulfillment.js), so it gets its own label.
+              reason: deliveredCount > 0 ? 'supplier_partial_delivery' : 'awaiting_supplier_delivery',
+              supplierOrderId: result.wgcardsOrderId || result.gift2gamesOrderId || null,
+            });
+          }
         } else {
           pendingItems.push({
             productId: item.productId,
@@ -752,7 +781,9 @@ class OrderService {
          od.order_detail_id, od.product_id, od.sku_id, od.quantity,
          od.delivered_qty, od.unit_price, od.delivery_status AS item_delivery_status,
          od.fulfillment_supplier, od.fulfillment_attempts, od.pending_reason,
-         od.wgcards_order_id, od.wgcards_service_order, od.last_polled_at,
+         od.wgcards_order_id, od.wgcards_service_order,
+         od.gift2games_order_id, od.gift2games_reference_number, od.gift2games_raw_response,
+         od.last_polled_at,
          p.product_name
        FROM orders o
        JOIN users u           ON u.user_id      = o.user_id
@@ -805,8 +836,17 @@ class OrderService {
         // stuck if it is, and the full cross-supplier attempt history.
         fulfillmentSupplier: r.fulfillment_supplier || null,
         pendingReason: r.pending_reason || null,
-        supplierOrderId: r.wgcards_order_id || null,
-        supplierServiceOrder: r.wgcards_service_order || null,
+        // Supplier-specific reference columns — pick the pair that matches
+        // whichever supplier actually fulfilled (or is attempting) this
+        // line rather than hardcoding WgCards' columns, which used to be
+        // the only ones ever shown here.
+        supplierOrderId: r.fulfillment_supplier === 'gift2games' ? (r.gift2games_order_id || null) : (r.wgcards_order_id || null),
+        supplierServiceOrder: r.fulfillment_supplier === 'gift2games' ? (r.gift2games_reference_number || null) : (r.wgcards_service_order || null),
+        // Fallback for admin review when the delivered-code extractor
+        // couldn't confidently parse Gift2Games' (unconfirmed) response
+        // shape — see utils/gift2gamesDelivery.js's header. Only ever
+        // populated for gift2games-fulfilled lines.
+        supplierRawResponse: r.gift2games_raw_response ? decrypt(r.gift2games_raw_response) : null,
         lastPolledAt: r.last_polled_at || null,
         fulfillmentAttempts: r.fulfillment_attempts
           ? (typeof r.fulfillment_attempts === 'string' ? JSON.parse(r.fulfillment_attempts) : r.fulfillment_attempts)

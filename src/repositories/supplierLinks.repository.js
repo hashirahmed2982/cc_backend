@@ -36,6 +36,21 @@ async function getLinksForSku(skuId) {
   return db.query('SELECT * FROM sku_supplier_links WHERE sku_id = ? ORDER BY supplier ASC', [skuId]);
 }
 
+/** All supplier links across every SKU of one canonical product, cheapest
+ * first within each SKU — what the admin "linked suppliers" panel (per
+ * product) reads from. Joined with sku_name so the UI can show which SKU
+ * each link belongs to without a second round trip. */
+async function getLinksForProduct(productId) {
+  return db.query(
+    `SELECT l.*, ps.sku_name
+       FROM sku_supplier_links l
+       JOIN product_skus ps ON ps.sku_id = l.sku_id
+      WHERE ps.product_id = ?
+      ORDER BY ps.sku_id ASC, l.cost_price_base_currency ASC, l.cost_price ASC`,
+    [productId]
+  );
+}
+
 /** Create a confirmed link, or refresh price/stock on an existing one
  * (keyed on supplier+supplier_sku_ref, per §9.2 step 4 — "every later
  * sync just updates cost_price/stock_status on the existing link"). */
@@ -163,7 +178,7 @@ async function addAlias(alias, canonicalBrand) {
 }
 
 module.exports = {
-  getActiveLinksForSku, getLinkBySupplierRef, getLinkById, getLinksForSku,
+  getActiveLinksForSku, getLinkBySupplierRef, getLinkById, getLinksForSku, getLinksForProduct,
   upsertLink, setLinkActive, setPriorityOverride, updateStockStatus,
   upsertStagingItem, getPendingReview, getStagingItem, getStagingItemBySupplierRef, markStagingStatus,
   getCanonicalBrand, addAlias,

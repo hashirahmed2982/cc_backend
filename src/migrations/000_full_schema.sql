@@ -308,9 +308,12 @@ CREATE TABLE IF NOT EXISTS order_details (
     delivery_status ENUM('pending', 'partial', 'completed', 'failed') NOT NULL DEFAULT 'pending',
     wgcards_service_order VARCHAR(100) NULL COMMENT 'Our idempotency key sent as serviceOrder — one per placeOrder attempt',
     wgcards_order_id VARCHAR(100) NULL COMMENT 'Supplier order id once placeOrder succeeds — presence means "already placed, do not re-order"',
+    gift2games_reference_number VARCHAR(100) NULL COMMENT 'Our idempotency key sent as referenceNumber — one per createOrder attempt, reused across retries of the SAME attempt (Flow H)',
+    gift2games_order_id VARCHAR(100) NULL COMMENT 'Supplier order id once createOrder succeeds — presence means "already placed, do not re-order"',
+    gift2games_raw_response TEXT NULL COMMENT 'Encrypted raw createOrder/getOrderDetails response — fallback for admin review when the delivered-code extractor can''t confidently identify a code/pin field in an unconfirmed response shape',
     fulfillment_supplier VARCHAR(50) NULL COMMENT 'Which supplier ultimately fulfilled (or is currently attempting) this line — wgcards | gift2games | internal',
     fulfillment_attempts JSON NULL COMMENT 'Master Plan §10.7 — full cross-supplier attempt history: [{supplier, serviceOrder, attemptedAt, result, reason}], oldest first. One entry per supplier tried, not per retry within a supplier (each supplier module owns its own retry policy).',
-    pending_reason VARCHAR(50) NULL COMMENT 'insufficient_inventory | supplier_rejected | supplier_timeout | supplier_auth_failure | awaiting_supplier_delivery | custom_value_not_supported_yet | supplier_api_pending | requires_direct_topup_flow | delayed | delayed_needs_admin_decision | supplier_cancelled | supplier_integration_down | supplier_disabled | no_active_supplier_link',
+    pending_reason VARCHAR(50) NULL COMMENT 'insufficient_inventory | supplier_rejected | supplier_timeout | supplier_auth_failure | awaiting_supplier_delivery | custom_value_not_supported_yet | supplier_api_pending | requires_direct_topup_flow | delayed | delayed_needs_admin_decision | supplier_cancelled | supplier_integration_down | supplier_disabled | no_active_supplier_link | supplier_partial_delivery',
     last_polled_at DATETIME NULL COMMENT 'Flow E poller — last getOrderInfoAndDetail check, drives the tiered poll cadence',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
@@ -319,7 +322,8 @@ CREATE TABLE IF NOT EXISTS order_details (
     INDEX idx_order_id (order_id),
     INDEX idx_product_id (product_id),
     INDEX idx_sku_id (sku_id),
-    INDEX idx_wgcards_order_id (wgcards_order_id)
+    INDEX idx_wgcards_order_id (wgcards_order_id),
+    INDEX idx_gift2games_order_id (gift2games_order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================

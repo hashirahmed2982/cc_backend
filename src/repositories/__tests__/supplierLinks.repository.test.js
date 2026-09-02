@@ -73,4 +73,11 @@ describe('supplierLinks.repository', () => {
     const result = await repo.getCanonicalBrand('Steam Gift Card');
     expect(result).toBe('steam');
   });
+
+  test('getLinksForProduct joins across every SKU of the product, cheapest first per SKU', async () => {
+    db.query.mockResolvedValueOnce([{ link_id: 1, sku_id: 5, supplier: 'wgcards' }]);
+    const result = await repo.getLinksForProduct(99);
+    expect(result).toEqual([{ link_id: 1, sku_id: 5, supplier: 'wgcards' }]);
+    expect(db.query).toHaveBeenCalledWith(expect.stringContaining('WHERE ps.product_id = ?'), [99]);
+  });
 });

@@ -11,6 +11,7 @@ const { body, param, query } = require('express-validator');
 const { validate } = require('../middleware/validation');
 const catalogMatching = require('../services/catalogMatching.service');
 const auditService = require('../services/audit.service');
+const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 
 router.use(protect, isAdmin);
 
@@ -116,6 +117,58 @@ router.post('/catalog-matching/:stagingId/ignore',
       if (/not found/.test(err.message)) return res.status(404).json({ success: false, message: err.message });
       next(err);
     }
+  }
+);
+
+// GET /api/v1/admin/sku-links?productId= — Master Plan §10's per-product
+// supplier view: every sku_supplier_links row across all of a product's
+// SKUs, so admin can see who's linked, at what price, and set an
+// always_prefer/never_use override or disable a link — the control this
+// codebase's dispatcher (supplierSelection.service.js) already reads but
+// had no admin-facing route/UI for until now.
+router.get('/sku-links',
+  [query('productId').isInt({ gt: 0 })],
+  validate,
+  async (req, res, next) => {
+    try {
+      const links = await supplierLinksRepo.getLinksForProduct(req.query.productId);
+      res.json({ success: true, data: links });
+    } catch (err) { next(err); }
+  }
+);
+
+// PATCH /api/v1/admin/sku-links/:linkId — { isActive?, priorityOverride? }
+router.patch('/sku-links/:linkId',
+  [
+    param('linkId').isInt({ gt: 0 }),
+    body('isActive').optional().isBoolean(),
+    body('priorityOverride').optional({ nullable: true }).isIn(['always_prefer', 'never_use', null]),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const link = await supplierLinksRepo.getLinkById(req.params.linkId);
+      if (!link) return res.status(404).json({ success: false, message: 'Supplier link not found' });
+
+      const changes = {};
+      if (req.body.isActive !== undefined) {
+        await supplierLinksRepo.setLinkActive(req.params.linkId, req.body.isActive);
+        changes.isActive = req.body.isActive;
+      }
+      if (req.body.priorityOverride !== undefined) {
+        await supplierLinksRepo.setPriorityOverride(req.params.linkId, req.body.priorityOverride);
+        changes.priorityOverride = req.body.priorityOverride;
+      }
+
+      await auditService.log({
+        user_id: req.user.user_id, action: 'sku_supplier_link_updated', entity_type: 'sku_supplier_links',
+        entity_id: String(req.params.linkId), old_values: { isActive: !!link.is_active, priorityOverride: link.admin_priority_override },
+        new_values: changes, ip_address: req.ip, user_agent: req.get('User-Agent'),
+      });
+
+      const updated = await supplierLinksRepo.getLinkById(req.params.linkId);
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
   }
 );
 
