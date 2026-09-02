@@ -18,6 +18,21 @@ const SUPPLIER = 'wgcards';
 const TOKEN_TTL_MS = 110 * 60 * 1000; // cache for 110 min (doc says token is valid 2h)
 const TOKEN_REFRESH_MARGIN_MS = 10 * 60 * 1000; // refresh if <10 min left
 
+// Confirmed live: WgCards doesn't ALWAYS signal an expired/invalid token via
+// HTTP 401 — it can also return HTTP 200 with an envelope-level rejection
+// (code 402, msg "token expired or token is error"). Without this, that
+// specific failure mode fell straight through to the generic
+// SupplierBusinessError path below, which is deliberately never retried —
+// meaning a genuinely expired token would keep failing every single call
+// until something else happened to trigger a refresh (the TTL cache
+// expiring on its own), rather than self-healing on the very next attempt
+// the way the 401 path already does.
+const AUTH_FAILURE_ENVELOPE_CODES = new Set([402]);
+function isAuthFailureEnvelope(parsed) {
+  if (AUTH_FAILURE_ENVELOPE_CODES.has(parsed.code)) return true;
+  return /token.*(expired|error|invalid)/i.test(String(parsed.msg || ''));
+}
+
 class SupplierAuthError extends Error {
   constructor(message) {
     super(message);
@@ -187,6 +202,18 @@ class WgCardsService {
       // integration-health signal (wrong key, corrupted response, etc).
       await supplierConfigRepo.recordFailure(SUPPLIER);
       throw new Error(`WgCards ${endpoint} failed: could not decrypt/parse response`);
+    }
+    if (parsed.code !== 200 && isAuthFailureEnvelope(parsed)) {
+      // See AUTH_FAILURE_ENVELOPE_CODES above — this is the same situation
+      // the res.status===401 branch already handles, just signaled inside
+      // a 200 envelope instead of the HTTP status. Same one-retry policy.
+      if (!_isRetry) {
+        logger.warn(`WgCardsService: ${endpoint} rejected with an auth-failure envelope (code ${parsed.code}: "${parsed.msg}") — forcing token refresh and retrying once`);
+        await supplierConfigRepo.clearToken(SUPPLIER);
+        return this._authedCall(endpoint, payload, { _isRetry: true });
+      }
+      await supplierConfigRepo.recordFailure(SUPPLIER);
+      throw new SupplierAuthError(`WgCards ${endpoint}: still auth-rejected (code ${parsed.code}: "${parsed.msg}") after forced token refresh`);
     }
     if (parsed.code !== 200) {
       // A coherent, well-formed rejection FROM WgCards (e.g. placeOrder's

@@ -156,6 +156,42 @@ describe('WgCardsService', () => {
     expect(supplierConfigRepo.recordFailure).not.toHaveBeenCalled();
   });
 
+  // Confirmed live: WgCards signals an expired/invalid token via a real
+  // HTTP 200 with envelope code:402, not always via HTTP 401 — see
+  // wgcards.service.js's AUTH_FAILURE_ENVELOPE_CODES comment.
+  test('on an envelope-level auth-failure (HTTP 200, code 402): forces one token refresh and retries once, then succeeds', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({
+      ...BASE_CFG, token: 'stale-but-not-yet-known-expired', token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    });
+    axios.post
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, { appId: APP_ID, code: 402, msg: 'token expired or token is error' }))
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, { appId: APP_ID, code: 200, data: 'new-token', msg: 'success' })) // forced getToken
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, {                                  // retried getAccount
+        appId: APP_ID, code: 200, data: { accounts: [], userId: APP_ID }, msg: 'success',
+      }));
+
+    const result = await wgcardsService.getAccount();
+
+    expect(axios.post).toHaveBeenCalledTimes(3);
+    expect(supplierConfigRepo.clearToken).toHaveBeenCalledWith('wgcards');
+    expect(axios.post.mock.calls[2][2].headers.Authorization).toBe('Bearer new-token');
+    expect(result).toEqual({ accounts: [], userId: APP_ID });
+  });
+
+  test('on a code:402 rejection again after the forced refresh: bubbles up supplier_auth_failure, does not retry a third time', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValue({
+      ...BASE_CFG, token: 'some-token', token_expires: new Date(Date.now() + 100 * 60 * 1000),
+    });
+    axios.post
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, { appId: APP_ID, code: 402, msg: 'token expired or token is error' }))
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, { appId: APP_ID, code: 200, data: 'new-token', msg: 'success' })) // forced getToken
+      .mockResolvedValueOnce(encryptedAxiosResponse(200, { appId: APP_ID, code: 402, msg: 'token expired or token is error' })); // still rejected
+
+    await expect(wgcardsService.getAccount()).rejects.toMatchObject({ code: 'supplier_auth_failure' });
+    expect(axios.post).toHaveBeenCalledTimes(3);
+    expect(supplierConfigRepo.recordFailure).toHaveBeenCalledWith('wgcards');
+  });
+
   test('getStock rejects an empty/missing skuIds array without making a network call', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...BASE_CFG });
     await expect(wgcardsService.getStock([])).rejects.toThrow(/non-empty array/);
