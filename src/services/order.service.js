@@ -9,6 +9,7 @@ const emailService = require('./email.service');
 const auditService = require('../services/audit.service');
 const wgcardsFulfillment = require('./wgcardsFulfillment');
 const supplierSelection = require('./supplierSelection.service');
+const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 const { decrypt } = require('../utils/dataCrypto');
 
@@ -275,14 +276,32 @@ class OrderService {
     const pendingItems = [];
 
     for (const item of resolvedItems) {
-      if (item.source !== 'internal') {
+      // products.source alone used to decide this — but Master Plan §9/§10's
+      // confirmLink can attach a supplier option to an INTERNAL product too
+      // (an admin linking WgCards/Gift2Games catalog items to an existing
+      // internal product), and confirmLink never touches products.source.
+      // Without this, that product's order would silently take the
+      // local-inventory path below, find zero manually-uploaded codes, and
+      // sit "insufficient_inventory" forever — never even attempting the
+      // suppliers that were just linked to it. Only queries
+      // sku_supplier_links when source is 'internal' — a pure
+      // supplier-sourced item never needed this check to begin with.
+      let hasSupplierOption = item.source !== 'internal';
+      if (!hasSupplierOption) {
+        const activeLinks = await supplierLinksRepo.getActiveLinksForSku(item.skuId);
+        hasSupplierOption = activeLinks.length > 0;
+      }
+
+      if (hasSupplierOption) {
         // Flow D, supplier branch (Phase 4, generalized in Phase 8 to
         // Master Plan §10's multi-supplier selection). Deliberately NOT
         // checking local digital_codes first here — unlike the doc's
-        // fully-generic hybrid model, this codebase ties `source` to one
-        // exclusive fulfillment path per product: a supplier-sourced
-        // product has no local codes to begin with (nobody manually
-        // uploads codes for API-fulfilled products).
+        // fully-generic hybrid model, this codebase ties fulfillment to one
+        // exclusive path per line: if ANY supplier is linked, that's tried
+        // first and exclusively — a manually-uploaded local code sitting
+        // alongside an active supplier link is NOT used as a fallback (or
+        // preferred) today. Flag this to the client if a product is ever
+        // meant to sell from both local stock AND a linked supplier at once.
         let result = await supplierSelection.selectAndFulfill({
           orderId,
           item: { skuId: item.skuId, quantity: item.quantity },
