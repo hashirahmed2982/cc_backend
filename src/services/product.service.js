@@ -7,6 +7,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const { encrypt, decrypt, hashCode } = require('../utils/dataCrypto');
 const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
+const { assertSellingPriceAboveCost } = require('../utils/priceGuard');
 
 const IMAGE_DIR = path.join(__dirname, '../../uploads/products'); // matches routes/product.routes.js
 
@@ -32,6 +33,7 @@ const PRODUCT_SELECT = `
     MIN(ps.sku_id)            AS primary_sku_id,
     MIN(ps.selling_price)     AS price,
     MIN(ps.cost_price)        AS cost_price,
+    MIN(ps.price_currency)    AS cost_currency,
     MIN(ps.face_value)        AS face_value,
     MIN(ps.supplier_sku_ref)  AS supplier_sku_ref,
     MIN(ps.realtime_price)    AS realtime_price,
@@ -150,6 +152,9 @@ class ProductService {
       const productId = pr.insertId;
       const sellingPrice = Math.round(parseFloat(data.price) * 100) / 100 || 0;
       const costPrice = data.discountPrice ? Math.round(parseFloat(data.discountPrice) * 100) / 100 : sellingPrice;
+      // Internal products are always USD (hardcoded in the INSERT below) —
+      // no currency ambiguity here, just the floor check.
+      assertSellingPriceAboveCost(sellingPrice, costPrice, 'USD');
 
       const [sr] = await conn.execute(`
         INSERT INTO product_skus
@@ -204,6 +209,11 @@ class ProductService {
       const sellingPrice = Math.round(parseFloat(data.price) * 100) / 100 || 0;
       const costPrice = Math.round((parseFloat(data.costPrice) || sellingPrice) * 100) / 100;
       const faceValue = Math.round((parseFloat(data.faceValue) || sellingPrice) * 100) / 100;
+      // costPrice here is hand-typed by the admin at creation time (before
+      // any sync has ever touched this SKU) — the form gives no currency
+      // selector, so it's taken as USD, matching the hardcoded 'USD' in
+      // the INSERT below.
+      assertSellingPriceAboveCost(sellingPrice, costPrice, 'USD');
 
       const [sr] = await conn.execute(`
         INSERT INTO product_skus
@@ -268,15 +278,52 @@ class ProductService {
 
       if (data.price !== undefined) {
         const selling = Math.round(parseFloat(data.price) * 100) / 100;
-        const cost = data.discountPrice ? Math.round(parseFloat(data.discountPrice) * 100) / 100
-          : data.costPrice ? Math.round(parseFloat(data.costPrice) * 100) / 100
-            : selling;
-        await db.query(`
-          UPDATE product_skus
-             SET selling_price = ?, cost_price = ?, realtime_price = ?
-           WHERE product_id = ? AND is_active = 1
-           ORDER BY sku_id LIMIT 1
-        `, [selling, cost, data.realtimePrice ? 1 : 0, productId]);
+
+        const prod = await db.queryOne('SELECT source FROM products WHERE product_id = ?', [productId]);
+        const sku = await db.queryOne(
+          `SELECT sku_id, cost_price, price_currency FROM product_skus
+            WHERE product_id = ? AND is_active = 1 ORDER BY sku_id LIMIT 1`,
+          [productId]
+        );
+
+        let cost, costCurrency;
+        if (prod && prod.source !== 'internal') {
+          // Supplier-sourced product: cost_price is synced automatically
+          // (catalogSync.js / gift2gamesCatalogSync.js / stockSync.js /
+          // gift2gamesStockSync.js) and is NOT admin-editable through this
+          // endpoint, regardless of what the request body sends — letting
+          // an admin hand-edit "what the supplier charges us" would let
+          // the margin floor guard below be trivially defeated (lower the
+          // cost in the same request that lowers the price). Any
+          // costPrice/discountPrice in the request body is ignored here.
+          cost = sku ? parseFloat(sku.cost_price) : selling;
+          costCurrency = sku?.price_currency || 'USD';
+        } else {
+          // Internal product — admin sets their own cost basis, always USD.
+          cost = data.discountPrice ? Math.round(parseFloat(data.discountPrice) * 100) / 100
+            : data.costPrice ? Math.round(parseFloat(data.costPrice) * 100) / 100
+              : selling;
+          costCurrency = 'USD';
+        }
+
+        assertSellingPriceAboveCost(selling, cost, costCurrency);
+
+        if (prod && prod.source !== 'internal') {
+          // cost_price deliberately excluded from this UPDATE — see above.
+          await db.query(`
+            UPDATE product_skus
+               SET selling_price = ?, realtime_price = ?
+             WHERE product_id = ? AND is_active = 1
+             ORDER BY sku_id LIMIT 1
+          `, [selling, data.realtimePrice ? 1 : 0, productId]);
+        } else {
+          await db.query(`
+            UPDATE product_skus
+               SET selling_price = ?, cost_price = ?, realtime_price = ?
+             WHERE product_id = ? AND is_active = 1
+             ORDER BY sku_id LIMIT 1
+          `, [selling, cost, data.realtimePrice ? 1 : 0, productId]);
+        }
       }
 
       return this.getById(productId);
@@ -607,6 +654,14 @@ class ProductService {
       redemptionInstructions: row.how_exchange || '',
       price: parseFloat(row.price) || 0,
       costPrice: parseFloat(row.cost_price) || 0,
+      // This portal only ever sells in USD — everywhere a price is
+      // displayed or charged treats it as a bare USD number. When a
+      // supplier returns cost data in another currency (confirmed to
+      // happen — see utils/priceGuard.js's header), costCurrency !=='USD'
+      // is the signal that costPrice above is NOT directly comparable to
+      // price/selling price; the admin UI should flag it rather than
+      // silently show a wrong margin.
+      costCurrency: row.cost_currency || 'USD',
       discountPrice: (row.cost_price && parseFloat(row.cost_price) < parseFloat(row.price))
         ? parseFloat(row.cost_price) : undefined,
       images,

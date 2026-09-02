@@ -11,6 +11,8 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 const { computeDefaultSellingPrice } = require('../jobs/catalogSync');
+const { assertSellingPriceAboveCost } = require('../utils/priceGuard');
+const { AppError } = require('../middleware/errorHandler');
 
 async function getDefaultMarginPercent() {
   const row = await db.queryOne("SELECT setting_value FROM system_settings WHERE setting_key = 'default_margin_percent'");
@@ -129,9 +131,35 @@ async function createNewFromStaging({ stagingId, reviewedBy, sellingPrice, categ
     let finalSellingPrice = sellingPrice != null ? parseFloat(sellingPrice) : null;
     let needsReview = false;
     if (finalSellingPrice == null) {
+      // Auto-computing a margin off costPrice only makes sense when
+      // costPrice is actually USD — this portal sells in USD only (see
+      // utils/priceGuard.js's header), and a margin baked onto a raw
+      // non-USD number would become a confidently-wrong "USD" price with
+      // no visible sign anything's off. Refuse to guess; require an
+      // explicit admin-entered price instead.
+      if (currency.toUpperCase() !== 'USD') {
+        // Let the existing catch block below roll back — don't roll back
+        // here too, a double rollback on the same connection can itself
+        // throw and mask this cleaner error.
+        throw new AppError(
+          `This item's cost is recorded in ${currency}, not USD — a default margin can't be computed safely. ` +
+          `Enter a selling price explicitly.`,
+          400
+        );
+      }
       const marginPercent = await getDefaultMarginPercent();
       finalSellingPrice = computeDefaultSellingPrice(costPrice, marginPercent);
       needsReview = true; // same "admin hasn't confirmed this price yet" flag catalogSync.js uses
+    } else {
+      // Admin gave an explicit price — still enforce the floor when we
+      // can trust the currency; when we can't, skip the numeric check
+      // (comparing incompatible units either way) but keep needs_review
+      // so it stays visibly flagged rather than looking confirmed.
+      if (currency.toUpperCase() === 'USD') {
+        assertSellingPriceAboveCost(finalSellingPrice, costPrice, currency);
+      } else {
+        needsReview = true;
+      }
     }
 
     const [sr] = await conn.execute(

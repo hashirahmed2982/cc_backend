@@ -45,8 +45,7 @@ describe('catalogSync pure mapping', () => {
   });
 
   describe('mapSkuForUpsert', () => {
-    test('maps a real live-sandbox sku record end to end', () => {
-      // Straight from the live getItem response captured during testing.
+    test('maps a real live-sandbox sku record end to end (USD — the normal case)', () => {
       const sku = {
         maxFaceValue: 10,
         maxPrice: 41.39,
@@ -55,7 +54,7 @@ describe('catalogSync pure mapping', () => {
         skuId: '12182768136',
         skuName: 'MLBB',
         skuPrice: 41.39,
-        skuPriceCurrency: 'CNY',
+        skuPriceCurrency: 'USD',
       };
 
       const result = mapSkuForUpsert(sku, 20);
@@ -68,9 +67,30 @@ describe('catalogSync pure mapping', () => {
         minFaceValue: 10,
         maxFaceValue: 10,
         costPrice: 41.39,
-        priceCurrency: 'CNY',
+        priceCurrency: 'USD',
         defaultSellingPrice: 49.67,
       });
+    });
+
+    test('non-USD currency (confirmed live anomaly — requesting USD is not always honored): no margin applied, defaultSellingPrice left equal to raw cost', () => {
+      // Straight from the live getItem response captured during testing —
+      // WgCards returned CNY despite the request explicitly asking for
+      // currencyCode:'USD'. Applying a 20% margin to 41.39 as if it were
+      // USD would produce a confidently-wrong $49.67 "USD" price (the real
+      // USD value of 41.39 CNY is roughly $5.70) — this portal only sells
+      // in USD (see utils/priceGuard.js), so that number must never be
+      // treated as a real USD price. See catalogSync.js's own comment on
+      // mapSkuForUpsert for the full rationale.
+      const sku = {
+        maxFaceValue: 10, minFaceValue: 10,
+        skuId: '12182768136', skuName: 'MLBB',
+        skuPrice: 41.39, skuPriceCurrency: 'CNY',
+      };
+
+      const result = mapSkuForUpsert(sku, 20);
+
+      expect(result.priceCurrency).toBe('CNY');
+      expect(result.defaultSellingPrice).toBe(41.39); // == costPrice, NOT margin-inflated
     });
 
     test('missing skuPriceCurrency falls back to USD', () => {
@@ -136,6 +156,21 @@ describe('catalogSync.syncOneItem — sku_supplier_links wiring (Master Plan §9
         costCurrency: 'USD',
         stockStatus: 'unknown',
       })
+    );
+  });
+
+  test('a non-USD sku still syncs (no margin-inflated price) and its link is recorded in its real currency', async () => {
+    const cnyItem = {
+      itemId: '77',
+      itemName: 'Test Item',
+      skus: [{ skuId: '12345', skuName: 'Test SKU', minFaceValue: 10, maxFaceValue: 10, skuPrice: 41.39, skuPriceCurrency: 'CNY' }],
+    };
+
+    const result = await syncOneItem(cnyItem, 20);
+
+    expect(result).toMatchObject({ productId: 501, created: 1 });
+    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(
+      expect.objectContaining({ costPrice: 41.39, costCurrency: 'CNY', costPriceBaseCurrency: null })
     );
   });
 

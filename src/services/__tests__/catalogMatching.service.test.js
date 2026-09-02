@@ -157,6 +157,41 @@ describe('createNewFromStaging', () => {
     expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
     expect(supplierLinksRepo.markStagingStatus).not.toHaveBeenCalled();
   });
+
+  test('an explicit sellingPrice below cost is rejected (the margin floor guard)', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce(stagingItem); // cost_price: 0.21, currency: USD
+    const conn = fakeConn([[{ insertId: 100 }]]);
+    db.getConnection.mockResolvedValueOnce(conn);
+
+    await expect(createNewFromStaging({ stagingId: 5, reviewedBy: 7, sellingPrice: 0.1 }))
+      .rejects.toThrow(/cannot be lower than cost price/);
+    expect(conn.rollback).toHaveBeenCalled();
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
+  });
+
+  test('a non-USD cost with NO explicit sellingPrice refuses to auto-compute a margin, never inserts anything', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce({ ...stagingItem, currency: 'CNY', cost_price: 41.39 });
+    const conn = fakeConn([[{ insertId: 100 }]]);
+    db.getConnection.mockResolvedValueOnce(conn);
+
+    await expect(createNewFromStaging({ stagingId: 5, reviewedBy: 7 }))
+      .rejects.toThrow(/not USD.*default margin/);
+    expect(conn.rollback).toHaveBeenCalled();
+    expect(db.queryOne).not.toHaveBeenCalled(); // never even looked up default_margin_percent
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
+  });
+
+  test('a non-USD cost WITH an explicit sellingPrice is allowed through (admin\'s call) but forced needs_review', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce({ ...stagingItem, currency: 'CNY', cost_price: 41.39 });
+    const conn = fakeConn([[{ insertId: 100 }], [{ insertId: 200 }], [{}]]);
+    db.getConnection.mockResolvedValueOnce(conn);
+
+    const result = await createNewFromStaging({ stagingId: 5, reviewedBy: 7, sellingPrice: 5 });
+
+    expect(result).toEqual({ productId: 100, skuId: 200 });
+    const skuInsertArgs = conn.execute.mock.calls[1][1];
+    expect(skuInsertArgs).toContain(1); // needs_review forced true despite an explicit price
+  });
 });
 
 describe('ignoreStaging', () => {

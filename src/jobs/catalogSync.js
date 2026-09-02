@@ -67,10 +67,24 @@ function computeDefaultSellingPrice(costPrice, defaultMarginPercent) {
   return Math.round(costPrice * (1 + margin / 100) * 100) / 100;
 }
 
-/** Build the full set of DB-shaped fields for one WgCards sku record. */
+/** Build the full set of DB-shaped fields for one WgCards sku record.
+ *
+ * CURRENCY: catalogSync.js always requests getItem({currencyCode:'USD'}),
+ * but that request has been observed NOT to be honored — a real captured
+ * sandbox response returned skuPriceCurrency:'CNY' despite it (see this
+ * file's own tests). This portal only ever sells in USD (see
+ * utils/priceGuard.js's header) — applying a margin to a non-USD costPrice
+ * would produce a confidently-wrong "USD" price with no visible sign
+ * anything's off, so when the currency isn't USD, defaultSellingPrice is
+ * left equal to the raw costPrice (no margin) rather than inflated —
+ * satisfies the DB's own selling_price >= cost_price constraint without
+ * compounding the wrong number, and needs_review (set unconditionally by
+ * upsertSku's INSERT) is what flags it for a human either way. */
 function mapSkuForUpsert(sku, defaultMarginPercent) {
   const { faceValue, isCustomValue, minFaceValue, maxFaceValue } = mapFaceValue(sku);
   const costPrice = Number(sku.skuPrice);
+  const priceCurrency = sku.skuPriceCurrency || 'USD';
+  const isUsd = priceCurrency.toUpperCase() === 'USD';
   return {
     wgcardsSkuId: String(sku.skuId),
     skuName: sku.skuName,
@@ -79,8 +93,8 @@ function mapSkuForUpsert(sku, defaultMarginPercent) {
     minFaceValue,
     maxFaceValue,
     costPrice,
-    priceCurrency: sku.skuPriceCurrency || 'USD',
-    defaultSellingPrice: computeDefaultSellingPrice(costPrice, defaultMarginPercent),
+    priceCurrency,
+    defaultSellingPrice: isUsd ? computeDefaultSellingPrice(costPrice, defaultMarginPercent) : costPrice,
   };
 }
 
@@ -212,6 +226,11 @@ async function syncOneItem(itemRaw, defaultMarginPercent) {
         continue;
       }
       const mapped = mapSkuForUpsert(sku, defaultMarginPercent);
+      if (mapped.priceCurrency.toUpperCase() !== 'USD') {
+        // See mapSkuForUpsert's header — this is the confirmed-live anomaly
+        // (requesting currencyCode:'USD' does not guarantee it's honored).
+        logger.warn(`catalogSync: wgcards sku ${mapped.wgcardsSkuId} (item ${itemRaw.itemId}) returned non-USD pricing (${mapped.priceCurrency}) despite requesting USD — selling_price left equal to the raw cost rather than margin-inflated; needs manual review.`);
+      }
       const { skuId, isNew } = await upsertSku(conn, productId, mapped);
       await ensureInventoryRow(conn, skuId);
       isNew ? created++ : updated++;
