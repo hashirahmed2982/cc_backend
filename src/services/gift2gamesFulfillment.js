@@ -4,23 +4,27 @@
 // supplierSelection.service.js (Master Plan §10) with the specific
 // sku_supplier_links row already resolved.
 //
-// UNTESTED AGAINST THE REAL API — see gift2games.service.js's header. The
-// retry/idempotency logic below matches the master plan's Flow D/H
-// description exactly; only live behavior against the actual Gift2Games
-// service is unverified (no JWT configured as of this writing).
+// The happy-path createOrder/getOrderDetails call and the delivered-code
+// extraction below are CONFIRMED against the real API as of 2026-09-02
+// (a real $0.21 purchase via scripts/test-gift2games-order.js --confirm —
+// see gift2games.service.js's header and utils/gift2gamesDelivery.js's
+// header for the captured shape). The retry/Flow-H idempotency-recovery
+// path (an ambiguous network failure followed by a getOrderDetails
+// lookup) is still unverified live — only the direct success path has
+// been exercised against a real order so far.
 //
 // DELIVERY: unlike WgCards (always async — Flow E's orderPoller.js has to
-// come back later via getBuyCard), the Gift2Games Postman collection's own
-// description of orders/details — "use it for timeout scenario" — implies
-// create_order normally answers synchronously with the order already
-// complete. So this module tries to extract a delivered code straight out
-// of createOrder's response (utils/gift2gamesDelivery.js) and, when found,
-// writes digital_codes immediately rather than parking the line as
-// "awaiting_supplier_delivery" the way WgCards always does. If no code is
-// found (a genuinely async product, or a response shape we didn't
-// anticipate), it falls back to the WgCards-style pending path, and
-// jobs/gift2gamesOrderPoller.js picks it up from there via the same
-// extractor against getOrderDetails.
+// come back later via getBuyCard), Gift2Games answers createOrder
+// SYNCHRONOUSLY with the order already complete — confirmed live
+// (orderStatus:'Completed' in the same response). So this module extracts
+// the delivered code straight out of createOrder's response
+// (utils/gift2gamesDelivery.js) and, when found, writes digital_codes
+// immediately rather than parking the line as "awaiting_supplier_delivery"
+// the way WgCards always does. If no code is found (a genuinely async
+// product, or a response shape this SKU's serialType doesn't share with
+// the one confirmed live), it falls back to the WgCards-style pending
+// path, and jobs/gift2gamesOrderPoller.js picks it up from there via the
+// same extractor against getOrderDetails.
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');

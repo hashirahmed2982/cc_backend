@@ -6,13 +6,30 @@
 // the poller could keep "finding" an order the create-time check already
 // decided wasn't delivered yet (or vice versa).
 //
-// Gift2Games' create_order/orders/details response shape for the DELIVERED
-// code has never been confirmed live (see gift2games.service.js's header —
-// only checkBalance() and getProducts() are). The vendor's Postman
-// collection examples for both endpoints only show request shape. This is
-// a best-effort scan across the field names gift-card/top-up vendors most
-// commonly use in practice, checked at the top level and a few likely
-// nesting points.
+// CONFIRMED LIVE 2026-09-02 (scripts/test-gift2games-order.js --confirm,
+// productId 1048 "MOBILE LEGENDS - 11 DIAMONDS", $0.21). The real
+// createOrder/getOrderDetails response is FLAT (no data/card/giftCard
+// nesting) and the delivered code field is `serialCode` — NOT any of the
+// generic gift-card vendor field names this file originally guessed
+// (code/cardCode/redeemCode/etc.). Those guesses are kept as a fallback
+// for any other product/serialType this specific sample didn't cover
+// (createOrder's response also carries a `serialType` field — 'voucher'
+// here — implying the shape may vary by type), but `serialCode` is the
+// one now known to be real. Full confirmed sample:
+//   { orderId, serialType:'voucher', serialCode, referenceNumber,
+//     serialNumber, serialExpiryDate, orderPrice, sellPrice, orderCurrency,
+//     OrderFake, time }
+// `serialNumber` was already in this file's SERIAL_FIELDS guess and turned
+// out correct — no PIN field appears for a voucher-type product.
+//
+// NOTE: that live response also included "OrderFake": true — flagged to
+// the client as worth confirming with Gift2Games support (does this mean
+// the balance wasn't actually debited for this specific test purchase, or
+// is every order on this account/product marked that way). Doesn't affect
+// this extractor either way — it's not a code/pin/serial field.
+//
+// getMyOrders/getCategories/updateSellPrice remain unconfirmed (see
+// gift2games.service.js's header).
 //
 // If nothing matches, the caller does NOT treat the order as delivered —
 // it stays pending and the raw response is preserved (order_details.
@@ -21,7 +38,7 @@
 // it did before this fix.
 'use strict';
 
-const CODE_FIELDS = ['code', 'cardCode', 'giftCardCode', 'redeemCode', 'voucherCode', 'cdkey', 'cdKey', 'key', 'activationCode', 'serial'];
+const CODE_FIELDS = ['serialCode', 'code', 'cardCode', 'giftCardCode', 'redeemCode', 'voucherCode', 'cdkey', 'cdKey', 'key', 'activationCode', 'serial'];
 const PIN_FIELDS = ['pin', 'cardPin', 'giftCardPin'];
 const SERIAL_FIELDS = ['serialNumber', 'sn', 'snCode'];
 

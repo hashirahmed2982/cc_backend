@@ -9,11 +9,15 @@
 // additionalFields — see that method's comment) or where only the
 // request shape is documented, not the response shape.
 //
-// LIVE STATUS as of 2026-09-01: checkBalance() is CONFIRMED working
-// end-to-end (envelope, auth header, real balance returned). Every other
-// method below is written correctly against the Postman collection's
-// request shape but has NOT yet had its response shape confirmed live —
-// don't treat a passing unit test as proof beyond checkBalance().
+// LIVE STATUS as of 2026-09-02: checkBalance(), getProducts(),
+// createOrder(), and getOrderDetails() are all CONFIRMED working
+// end-to-end against the real API (createOrder/getOrderDetails via
+// scripts/test-gift2games-order.js --confirm, a real $0.21 purchase — see
+// utils/gift2gamesDelivery.js's header for the exact captured shape).
+// getMyOrders(), getCategories(), and updateSellPrice() are still only
+// written correctly against the Postman collection's request shape, not
+// yet confirmed live — don't treat a passing unit test as proof for those
+// three.
 //
 // Confirmed from the Postman collection (all endpoints, not just some):
 //   - EVERY endpoint is POST, including read-only ones like check_balance
