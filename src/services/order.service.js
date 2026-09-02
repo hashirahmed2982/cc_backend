@@ -9,6 +9,7 @@ const emailService = require('./email.service');
 const auditService = require('../services/audit.service');
 const wgcardsFulfillment = require('./wgcardsFulfillment');
 const supplierSelection = require('./supplierSelection.service');
+const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 const { decrypt } = require('../utils/dataCrypto');
 
 // ─── Generate order number ────────────────────────────────────────────────────
@@ -100,11 +101,22 @@ class OrderService {
 
         // Get product
         const [prodRows] = await conn.execute(
-          'SELECT product_id, product_name, source, is_active FROM products WHERE product_id = ?',
+          'SELECT product_id, product_name, source, is_active, spu_type FROM products WHERE product_id = ?',
           [productId]
         );
         if (!prodRows.length) throw new Error(`Product ${productId} not found`);
         if (!prodRows[0].is_active) throw new Error(`Product "${prodRows[0].product_name}" is not active`);
+        if (prodRows[0].spu_type === DIRECT_TOPUP_SPU_TYPE) {
+          // Confirmed live (order 32, "Airplane-chefs"): a Direct Top-Up
+          // product placed through this regular flow debits the wallet
+          // and then silently never fulfills — wgcardsFulfillment.js
+          // already rejects it downstream, but only AFTER the debit. This
+          // stops it at the door instead, before any money moves. Client
+          // decision: WgCards Direct Top-Up products are not sold at all
+          // for now (no purchase flow exists to collect the account/
+          // player-ID fields Flow F actually needs).
+          throw new Error(`Product "${prodRows[0].product_name}" is a Direct Top-Up product and cannot be ordered through the regular checkout`);
+        }
 
         // Get primary active SKU (or specific one if provided)
         const skuQuery = item.skuId

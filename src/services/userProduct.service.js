@@ -3,6 +3,7 @@
 
 const db     = require('../config/database');
 const logger = require('../utils/logger');
+const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 
 // ─── SQL fragment: join products + access + pricing for one user ──────────────
 // Logic:
@@ -30,6 +31,10 @@ const USER_PRODUCT_SELECT = (userId) => `
   LEFT JOIN client_pricing cp
          ON cp.sku_id = ps.sku_id AND cp.user_id = ${parseInt(userId)}
   WHERE p.is_active = 1
+    -- Direct Top-Up (spuType:5) products are never sold — hidden even from
+    -- this admin per-client access-config screen ("even admin shouldnt see
+    -- those products let alone user"). NULL-safe for non-WgCards products.
+    AND (p.spu_type IS NULL OR p.spu_type != ${DIRECT_TOPUP_SPU_TYPE})
   GROUP BY p.product_id, cpa.access_type, cp.custom_price
   ORDER BY p.product_name ASC
 `;
@@ -203,8 +208,11 @@ async getClientProducts(userId, { search, category, page = 1, limit = 50 } = {})
       const offset = (page - 1) * limit;
  
       // Build WHERE conditions — params must match ? placeholders in order
-      const conds  = ['p.is_active = 1'];
-      const params = [];
+      // Direct Top-Up (spuType:5) products are never sellable through this
+      // checkout — hidden here too, NULL-safe so internal/non-WgCards
+      // products (spu_type IS NULL) aren't accidentally excluded.
+      const conds  = ['p.is_active = 1', '(p.spu_type IS NULL OR p.spu_type != ?)'];
+      const params = [DIRECT_TOPUP_SPU_TYPE];
  
       // NOT EXISTS deny check — 1st ?
       conds.push(`NOT EXISTS (

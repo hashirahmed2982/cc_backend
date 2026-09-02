@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const fs = require('fs').promises;
 const path = require('path');
 const { encrypt, decrypt, hashCode } = require('../utils/dataCrypto');
+const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 
 const IMAGE_DIR = path.join(__dirname, '../../uploads/products'); // matches routes/product.routes.js
 
@@ -63,7 +64,14 @@ class ProductService {
   async getAll({ page = 1, limit = 20, search, category, brand, status, source } = {}) {
     try {
       const offset = (page - 1) * limit;
-      const conds = [], params = [];
+      // Direct Top-Up (spuType:5) products are never sellable through the
+      // regular checkout (order.service.js hard-blocks them) — per an
+      // explicit client decision ("we avoid direct topup order products, we
+      // would not sell those") they're hidden from this listing unconditionally,
+      // for every caller including admin ("even admin shouldnt see those
+      // products let alone user"). NULL-safe: internal/non-WgCards products
+      // have spu_type IS NULL and must not be excluded by an ordinary != .
+      const conds = ['(p.spu_type IS NULL OR p.spu_type != ?)'], params = [DIRECT_TOPUP_SPU_TYPE];
 
       if (search) {
         conds.push('(p.product_name LIKE ? OR p.brand_name LIKE ? OR p.category LIKE ? OR CAST(p.product_id AS CHAR) LIKE ?)');

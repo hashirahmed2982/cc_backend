@@ -28,6 +28,7 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('../services/wgcards.service');
 const { checkSupplierEnabled } = require('./_supplierGate');
+const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 
 const PAGE_SIZE = 50;
 const PAGE_DELAY_MS = 1600; // keeps us under getItem's 40 calls/60s limit even for a large catalog
@@ -120,11 +121,19 @@ async function upsertProduct(conn, itemRaw) {
     return productId;
   }
 
+  // Direct Top-Up (spuType:5) products are never sold (confirmed live incident
+  // — order 32 debited a wallet then couldn't fulfill) and are hidden from
+  // every listing regardless of is_active. Insert them already inactive as a
+  // second line of defense, so a stray direct query against is_active=1
+  // still doesn't expose one, and so future syncs never silently "reactivate"
+  // one a human deliberately deactivated.
+  const isDirectTopUp = Number(itemRaw.spuType) === DIRECT_TOPUP_SPU_TYPE;
+
   const [result] = await conn.execute(
     `INSERT INTO products
        (spu_id, product_name, brand_name, description, how_exchange,
         image_url, spu_type, currency_code, is_active, source, sync_enabled, last_synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'wgcards', 1, NOW())`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'wgcards', 1, NOW())`,
     [
       String(itemRaw.itemId),
       itemRaw.itemName,
@@ -134,6 +143,7 @@ async function upsertProduct(conn, itemRaw) {
       itemRaw.spuImage || null,
       itemRaw.spuType ?? null,
       itemRaw.currencyCode || 'USD',
+      isDirectTopUp ? 0 : 1,
     ]
   );
   return result.insertId;

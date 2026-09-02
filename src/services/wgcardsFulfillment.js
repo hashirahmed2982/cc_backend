@@ -11,12 +11,10 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 const wgcardsService = require('./wgcards.service');
 const supplierConfigRepo = require('../repositories/supplierConfig.repository');
+const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 
 // "retry network/timeout only: 2 retries, 2s -> 6s backoff" (§6)
 const RETRY_DELAYS_MS = [2000, 6000];
-
-// products.spu_type — per the doc's GetProductInfo field list.
-const DIRECT_TOPUP_SPU_TYPE = 5;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
