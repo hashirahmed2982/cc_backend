@@ -5,8 +5,10 @@ jest.mock('../../config/database', () => ({
   query: jest.fn(),
   queryOne: jest.fn(),
 }));
+jest.mock('../../repositories/supplierLinks.repository');
 
 const db = require('../../config/database');
+const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
 const productService = require('../product.service');
 
 function fakeConn() {
@@ -20,7 +22,12 @@ function fakeConn() {
 }
 
 describe('product.service price guard (admin cannot undercut supplier/internal cost)', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Default: no linked suppliers — most tests here don't care about the
+    // linked-supplier price guard, only individual tests below override it.
+    supplierLinksRepo.getActiveLinksForSku.mockResolvedValue([]);
+  });
 
   describe('createInternal', () => {
     test('rejects a selling price below the given discountPrice (cost)', async () => {
@@ -96,6 +103,67 @@ describe('product.service price guard (admin cannot undercut supplier/internal c
       await expect(
         productService.update(1, { price: 100 }, 1)
       ).rejects.toThrow(/not USD/);
+    });
+
+    // Real report: "when i edit a product price from products page i am
+    // able to set a lower price than the cost price if any supplier
+    // product is linked." The guard above only ever checked
+    // product_skus.cost_price (this SKU's own recorded cost) — an
+    // internal product that later had a $550-cost supplier linked via
+    // confirmLink kept whatever low cost_price/discountPrice it already
+    // had, completely blind to the linked supplier's real cost.
+    test("internal product with a linked supplier whose cost is HIGHER than the SKU's own recorded cost -> still blocked, even though the own-basis check alone would pass", async () => {
+      db.queryOne
+        .mockResolvedValueOnce({ source: 'internal' })
+        .mockResolvedValueOnce({ sku_id: 9, cost_price: 8, price_currency: 'USD' });
+      // Own-basis check (5 >= discountPrice 3) would pass on its own —
+      // the linked supplier's real cost (550) is the one that must block it.
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([
+        { supplier: 'gift2games', cost_price: 550, cost_currency: 'USD' },
+      ]);
+
+      await expect(
+        productService.update(1, { price: 5, discountPrice: 3 }, 1)
+      ).rejects.toThrow(/Linked gift2games supplier: Selling price \(\$5\.00\) cannot be lower than cost price \(\$550\.00\)/);
+    });
+
+    test('multiple linked suppliers -> checked against EVERY one, not just the cheapest', async () => {
+      db.queryOne
+        .mockResolvedValueOnce({ source: 'internal' })
+        .mockResolvedValueOnce({ sku_id: 9, cost_price: 8, price_currency: 'USD' });
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([
+        { supplier: 'wgcards', cost_price: 10, cost_currency: 'USD' },   // cheaper, would pass alone
+        { supplier: 'gift2games', cost_price: 550, cost_currency: 'USD' }, // pricier, must still block
+      ]);
+
+      await expect(
+        productService.update(1, { price: 20, discountPrice: 8 }, 1)
+      ).rejects.toThrow(/Linked gift2games supplier/);
+    });
+
+    test('a linked supplier cost recorded in a non-USD currency -> blocked outright, not silently skipped', async () => {
+      db.queryOne
+        .mockResolvedValueOnce({ source: 'internal' })
+        .mockResolvedValueOnce({ sku_id: 9, cost_price: 8, price_currency: 'USD' });
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([
+        { supplier: 'wgcards', cost_price: 41.39, cost_currency: 'CNY' },
+      ]);
+
+      await expect(
+        productService.update(1, { price: 100, discountPrice: 8 }, 1)
+      ).rejects.toThrow(/Linked wgcards supplier:.*not USD/);
+    });
+
+    test('a price that clears every linked supplier AND the own cost basis -> accepted', async () => {
+      db.queryOne
+        .mockResolvedValueOnce({ source: 'internal' })
+        .mockResolvedValueOnce({ sku_id: 9, cost_price: 8, price_currency: 'USD' });
+      db.query.mockResolvedValueOnce([{ product_id: 1 }]); // getById
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([
+        { supplier: 'wgcards', cost_price: 10, cost_currency: 'USD' },
+      ]);
+
+      await expect(productService.update(1, { price: 15, discountPrice: 8 }, 1)).resolves.toBeDefined();
     });
   });
 

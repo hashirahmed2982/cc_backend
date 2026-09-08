@@ -8,6 +8,7 @@ const path = require('path');
 const { encrypt, decrypt, hashCode } = require('../utils/dataCrypto');
 const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 const { assertSellingPriceAboveCost } = require('../utils/priceGuard');
+const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 
 const IMAGE_DIR = path.join(__dirname, '../../uploads/products'); // matches routes/product.routes.js
 
@@ -328,6 +329,30 @@ class ProductService {
         }
 
         assertSellingPriceAboveCost(selling, cost, costCurrency);
+
+        // Real gap this closes: the check above only ever compared against
+        // product_skus.cost_price — this SKU's OWN recorded cost (the
+        // internal manual cost, or the originating supplier's synced
+        // cost). It never looked at sku_supplier_links at all, so an
+        // ALREADY-linked supplier's cost was invisible here — an internal
+        // product with a $550-cost supplier linked to it (confirmLink
+        // already guards the link itself, but not this edit form
+        // afterwards) could still have its price dropped to $5 through
+        // this endpoint with nothing to stop it. Checked against EVERY
+        // active link, not just the cheapest — admin_priority_override or
+        // a stockout can route an order to any of them, not only whichever
+        // is cheapest today.
+        if (sku) {
+          const activeLinks = await supplierLinksRepo.getActiveLinksForSku(sku.sku_id);
+          for (const link of activeLinks) {
+            try {
+              assertSellingPriceAboveCost(selling, parseFloat(link.cost_price), link.cost_currency || 'USD');
+            } catch (err) {
+              err.message = `Linked ${link.supplier} supplier: ${err.message}`;
+              throw err;
+            }
+          }
+        }
 
         if (prod && prod.source !== 'internal') {
           // cost_price deliberately excluded from this UPDATE — see above.
