@@ -159,14 +159,46 @@ describe('confirmLink', () => {
 
   test('happy path: creates the link and marks the staging item linked', async () => {
     supplierLinksRepo.getStagingItem.mockResolvedValueOnce(stagingItem);
+    db.queryOne.mockResolvedValueOnce({ selling_price: 0.5 }); // target SKU already sells above the 0.21 cost
 
     const result = await confirmLink({ stagingId: 5, skuId: 42, reviewedBy: 7 });
 
+    expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('FROM product_skus'), [42]);
     expect(result).toEqual({ skuId: 42 });
     expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(expect.objectContaining({
       skuId: 42, supplier: 'gift2games', supplierSkuRef: '1048', costPrice: 0.21, costCurrency: 'USD', costPriceBaseCurrency: 0.21,
     }));
     expect(supplierLinksRepo.markStagingStatus).toHaveBeenCalledWith(5, 'linked', 7);
+  });
+
+  // Real gap this closes: linking a $550-cost supplier SKU to a product
+  // already selling at $30 used to go through silently — confirmLink had
+  // no price floor at all, unlike createNewFromStaging.
+  test('refuses to link when the target SKU already sells below the incoming cost — no link created, staging item left pending', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce({ ...stagingItem, cost_price: 550 });
+    db.queryOne.mockResolvedValueOnce({ selling_price: 30 });
+
+    await expect(confirmLink({ stagingId: 5, skuId: 42, reviewedBy: 7 })).rejects.toThrow(
+      /Selling price \(\$30\.00\) cannot be lower than cost price \(\$550\.00\)/
+    );
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
+    expect(supplierLinksRepo.markStagingStatus).not.toHaveBeenCalled();
+  });
+
+  test('refuses to link when the incoming cost is not in USD — cannot be safely compared, blocks rather than guessing', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce({ ...stagingItem, currency: 'CNY', cost_price: 41.39 });
+    db.queryOne.mockResolvedValueOnce({ selling_price: 100 }); // even a selling price that "looks" high enough must still block
+
+    await expect(confirmLink({ stagingId: 5, skuId: 42, reviewedBy: 7 })).rejects.toThrow(/not USD/);
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
+  });
+
+  test('throws a clear error when the target skuId does not exist', async () => {
+    supplierLinksRepo.getStagingItem.mockResolvedValueOnce(stagingItem);
+    db.queryOne.mockResolvedValueOnce(null);
+
+    await expect(confirmLink({ stagingId: 5, skuId: 9999, reviewedBy: 7 })).rejects.toThrow(/Target SKU not found/);
+    expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
   });
 });
 

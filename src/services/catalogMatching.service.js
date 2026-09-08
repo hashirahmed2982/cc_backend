@@ -129,6 +129,20 @@ async function confirmLink({ stagingId, skuId, reviewedBy }) {
   assertPendingReview(item);
 
   const currency = item.currency || 'USD';
+
+  // Real gap this closes: linking a staged item to an EXISTING product had
+  // zero regard for whether the numbers made sense — an admin could link a
+  // $550-cost supplier SKU to a product already selling at $30 and it would
+  // go through silently, same as any other match. createNewFromStaging
+  // already has this floor for a brand-new product; this is the other of
+  // the two ways a staged item goes live, and it had no equivalent check.
+  // Same guard, same currency handling as everywhere else in the codebase
+  // (a non-USD cost blocks outright rather than comparing incompatible
+  // units — see priceGuard.js's header).
+  const targetSku = await db.queryOne('SELECT selling_price FROM product_skus WHERE sku_id = ?', [skuId]);
+  if (!targetSku) throw new AppError('Target SKU not found.', 404);
+  assertSellingPriceAboveCost(targetSku.selling_price, item.cost_price, currency);
+
   await supplierLinksRepo.upsertLink({
     skuId,
     supplier: item.supplier,
