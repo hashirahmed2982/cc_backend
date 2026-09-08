@@ -77,6 +77,25 @@ describe('supplierLinks.repository', () => {
     expect(db.query.mock.calls[0][0]).toContain('supplier = ?');
   });
 
+  // Link Products page search bar — matches item_name OR brand_name.
+  // brand_name is qualified sci.brand_name deliberately: products.brand_name
+  // is also in this query's JOIN, so an unqualified column is genuinely
+  // ambiguous to MySQL, not just inconsistent style.
+  test('getPendingReview search matches item_name/brand_name, qualified against the sci alias on both the row query and the count query', async () => {
+    db.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+    await repo.getPendingReview({ search: 'apple' });
+
+    const [rowSql, rowParams] = db.query.mock.calls[0];
+    expect(rowSql).toContain('sci.item_name LIKE ?');
+    expect(rowSql).toContain('sci.brand_name LIKE ?');
+    expect(rowParams).toEqual(expect.arrayContaining(['%apple%', '%apple%']));
+
+    const [countSql] = db.query.mock.calls[1];
+    // The count query must alias supplier_catalog_items as sci too, or the
+    // sci.-qualified WHERE clause above breaks it with an unknown alias.
+    expect(countSql).toContain('FROM supplier_catalog_items sci');
+  });
+
   test('markStagingStatus records who reviewed it and when', async () => {
     db.query.mockResolvedValueOnce(undefined);
     await repo.markStagingStatus(3, 'linked', 7);

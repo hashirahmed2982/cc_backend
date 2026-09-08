@@ -22,14 +22,15 @@ router.use(protect, isAdmin);
 router.get('/catalog-matching/pending',
   [
     query('supplier').optional().isString().trim(),
+    query('search').optional().isString().trim(),
     query('page').optional().isInt({ min: 1 }),
     query('limit').optional().isInt({ min: 1, max: 200 }),
   ],
   validate,
   async (req, res, next) => {
     try {
-      const { supplier, page, limit } = req.query;
-      const result = await catalogMatching.getPendingReview({ supplier, page, limit });
+      const { supplier, search, page, limit } = req.query;
+      const result = await catalogMatching.getPendingReview({ supplier, search, page, limit });
       res.json({ success: true, data: result.rows, pagination: result.pagination });
     } catch (err) { next(err); }
   }

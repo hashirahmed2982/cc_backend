@@ -126,10 +126,17 @@ async function getStagingItemBySupplierRef(supplier, supplierSkuRef) {
   );
 }
 
-async function getPendingReview({ supplier, page = 1, limit = 50 } = {}) {
+async function getPendingReview({ supplier, search, page = 1, limit = 50 } = {}) {
   const conds = ["status = 'pending_review'"];
   const params = [];
   if (supplier) { conds.push('supplier = ?'); params.push(supplier); }
+  if (search) {
+    // sci. prefix is required here, not just style — products.brand_name
+    // also exists in this query's JOIN, so an unqualified brand_name is
+    // genuinely ambiguous to MySQL, not merely inconsistent.
+    conds.push('(sci.item_name LIKE ? OR sci.brand_name LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
   const where = `WHERE ${conds.join(' AND ')}`;
   const safeLimit = Math.min(parseInt(limit) || 50, 200);
   const offset = (Math.max(parseInt(page) || 1, 1) - 1) * safeLimit;
@@ -144,7 +151,10 @@ async function getPendingReview({ supplier, page = 1, limit = 50 } = {}) {
       LIMIT ? OFFSET ?`,
     [...params, safeLimit, offset]
   );
-  const [{ total }] = await db.query(`SELECT COUNT(*) AS total FROM supplier_catalog_items ${where}`, params);
+  // Aliased as sci to match the `where` clause above (the search branch
+  // qualifies item_name/brand_name with sci. — an unaliased table here
+  // would break that reference, not just be inconsistent with it).
+  const [{ total }] = await db.query(`SELECT COUNT(*) AS total FROM supplier_catalog_items sci ${where}`, params);
   return { rows, pagination: { page: Math.max(parseInt(page) || 1, 1), limit: safeLimit, total } };
 }
 
