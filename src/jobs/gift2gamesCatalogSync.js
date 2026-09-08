@@ -31,6 +31,22 @@
 // to become a real link, so the failure mode is "annoying to review", not
 // "silently sells the wrong product".
 //
+// TWO DIFFERENT CURRENCIES, CONFIRMED LIVE: a real /products record for a
+// regional card looks like:
+//   { price: 2.632, currency: 'USD', productFaceValue: 2, productFaceValueCurrency: 'GBP', originalPrice: '1.945', originalCurrency: 'GBP' }
+// `price`/`currency` (what we actually pay Gift2Games) is ALWAYS USD —
+// same confirmed pattern as WgCards' skuPrice/skuPriceCurrency. But
+// `productFaceValue`/`productFaceValueCurrency` (what the card is worth in
+// its home market, e.g. a UK Apple card really is denominated in GBP) is
+// NOT the same currency and must never be conflated with it. This job used
+// to store the face-value currency into supplier_catalog_items.currency
+// (so the review UI would show "2 GBP" correctly) — but
+// catalogMatching.service.js reads that same `currency` column as the
+// currency cost_price is IN, so a $2.632 USD cost was ending up mislabeled
+// 'GBP' on confirm (migration 016 fixes this split — see its own comment).
+// `currency` here now always carries the cost/price currency (USD);
+// `faceValueCurrency` carries the card's own denomination separately.
+//
 // Usage:
 //   node src/jobs/gift2gamesCatalogSync.js
 'use strict';
@@ -96,7 +112,12 @@ async function syncOneProduct(product) {
     itemName: product.title,
     brandName: deriveBrandFromTitle(product.title),
     faceValue: product.productFaceValue,
-    currency: product.productFaceValueCurrency || currency,
+    // `currency` = what cost_price is denominated in (always USD, per file
+    // header). `faceValueCurrency` = what the card itself is worth in its
+    // home market (e.g. GBP) — kept separate so it never leaks into
+    // cost_price's currency tag downstream. See migration 016.
+    currency,
+    faceValueCurrency: product.productFaceValueCurrency || currency,
     region: null, // not exposed by Gift2Games' /products response — see file header
     costPrice: product.price,
     matchKey: await buildMatchKey(product),

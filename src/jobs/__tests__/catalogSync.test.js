@@ -172,7 +172,9 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
 
     expect(result.outcomes).toMatchObject({ newly_staged: 1, link_refreshed: 0, sku_added: 0, topup_skipped: 0 });
     expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalledWith(
-      expect.objectContaining({ supplier: 'wgcards', supplierRef: '77', supplierSkuRef: '12345', itemName: 'Test Item', costPrice: 8 })
+      // faceValueCurrency mirrors currency for WgCards — it has no separate
+      // face-value-currency field the way Gift2Games does (see migration 016).
+      expect.objectContaining({ supplier: 'wgcards', supplierRef: '77', supplierSkuRef: '12345', itemName: 'Test Item', costPrice: 8, currency: 'USD', faceValueCurrency: 'USD' })
     );
     expect(db.transaction).not.toHaveBeenCalled();
     expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();

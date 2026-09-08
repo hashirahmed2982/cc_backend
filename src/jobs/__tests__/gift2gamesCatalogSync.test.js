@@ -71,6 +71,43 @@ describe('gift2gamesCatalogSync.run', () => {
     );
   });
 
+  // Real captured bug: a UK Apple card returns price:2.632/currency:'USD'
+  // (what we pay) alongside productFaceValue:2/productFaceValueCurrency:'GBP'
+  // (what the card is worth). Before migration 016 these got conflated into
+  // one `currency` field, mislabeling the USD cost as GBP downstream.
+  test('cost currency (`currency`) always mirrors product.currency, never the face-value currency, even when they differ', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 1 });
+    gift2gamesService.getProducts.mockResolvedValueOnce([{
+      id: '3110', categoryId: '703', title: 'APPLE UK - 2 GBP', price: 2.632, currency: 'USD', inStock: true,
+      productFaceValue: 2, productFaceValueCurrency: 'GBP',
+    }]);
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    supplierLinksRepo.getStagingItemBySupplierRef.mockResolvedValueOnce(null);
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('apple');
+
+    await run();
+
+    expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalledWith(
+      expect.objectContaining({ costPrice: 2.632, currency: 'USD', faceValueCurrency: 'GBP', faceValue: 2 })
+    );
+  });
+
+  test('face value currency falls back to the cost currency when Gift2Games does not expose one', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 1 });
+    gift2gamesService.getProducts.mockResolvedValueOnce([
+      { id: '1', title: 'STEAM WALLET - 5 USD', price: 5, currency: 'USD', inStock: true, productFaceValue: 5 },
+    ]);
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+    supplierLinksRepo.getStagingItemBySupplierRef.mockResolvedValueOnce(null);
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('steam wallet');
+
+    await run();
+
+    expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'USD', faceValueCurrency: 'USD' })
+    );
+  });
+
   test('an already-linked product only refreshes cost/stock on the existing link, never re-stages', async () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 1 });
     gift2gamesService.getProducts.mockResolvedValueOnce([

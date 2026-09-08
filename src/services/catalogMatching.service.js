@@ -40,8 +40,23 @@ async function buildCanonicalMatchKey({ brandName, faceValue, currency }) {
  * indexing/batching if it grows into the thousands.
  */
 async function findSuggestedMatches(item, { limit = 5 } = {}) {
+  // The match key's currency component needs the card's own face-value
+  // currency (region signal — a UK GBP card and a US USD card sharing a
+  // face-value number are DIFFERENT real-world products, not the same
+  // item just quoted in a different currency), not `item.currency`
+  // (cost_price's currency, always USD for Gift2Games — see migration 016
+  // / catalogSync header comments). face_value_currency falls back to
+  // currency for WgCards items and any pre-migration-016 staged row.
+  //
+  // NOTE: canonical product_skus has no equivalent face-value-currency
+  // column today (only price_currency, always USD — this portal only
+  // sells USD, see priceGuard.js) — so a non-USD-denominated incoming
+  // item will rarely produce an auto-suggestion via this key. That's the
+  // deliberately safer failure mode: "no suggestion, admin uses the
+  // manual search fallback" beats silently suggesting a same-numbered but
+  // wrong-region card as a match.
   const matchKey = item.match_key || await buildCanonicalMatchKey({
-    brandName: item.brand_name, faceValue: item.face_value, currency: item.currency,
+    brandName: item.brand_name, faceValue: item.face_value, currency: item.face_value_currency || item.currency,
   });
 
   const candidates = await db.query(

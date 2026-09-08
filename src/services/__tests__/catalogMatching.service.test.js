@@ -55,6 +55,37 @@ describe('findSuggestedMatches', () => {
     const { matches } = await findSuggestedMatches(stagingItem);
     expect(matches).toEqual([]);
   });
+
+  // Real bug this covers: a UK Apple card has cost_price in USD (`currency`)
+  // but is denominated in GBP (`face_value_currency`) — the match key must
+  // use the latter (region signal), not the former, or a GBP card and a
+  // same-numbered USD card would incorrectly look identical.
+  test('with no pre-computed match_key, the currency component comes from face_value_currency, not currency', async () => {
+    const gbpItem = {
+      staging_id: 9, supplier: 'gift2games', brand_name: 'APPLE', face_value: 2,
+      currency: 'USD', face_value_currency: 'GBP', // cost is USD; the card itself is GBP
+      cost_price: 2.632, match_key: null,
+    };
+    db.query.mockResolvedValueOnce([]);
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('apple');
+
+    const { matchKey } = await findSuggestedMatches(gbpItem);
+
+    expect(matchKey).toBe('apple|2.00|GBP');
+  });
+
+  test('face_value_currency missing (pre-migration row or WgCards) -> falls back to currency', async () => {
+    const item = {
+      staging_id: 10, supplier: 'wgcards', brand_name: 'XBOX', face_value: 20,
+      currency: 'USD', face_value_currency: null, cost_price: 15, match_key: null,
+    };
+    db.query.mockResolvedValueOnce([]);
+    supplierLinksRepo.getCanonicalBrand.mockResolvedValueOnce('xbox');
+
+    const { matchKey } = await findSuggestedMatches(item);
+
+    expect(matchKey).toBe('xbox|20.00|USD');
+  });
 });
 
 describe('searchCanonicalProducts', () => {

@@ -98,23 +98,23 @@ async function updateStockStatus(supplier, supplierSkuRef, stockStatus) {
  * a match via markLinked/markCreatedNew. */
 async function upsertStagingItem({
   supplier, supplierRef, supplierSkuRef, itemName, brandName,
-  faceValue, currency, region, costPrice, matchKey, suggestedSkuId, rawPayload,
+  faceValue, currency, faceValueCurrency, region, costPrice, matchKey, suggestedSkuId, rawPayload,
 }) {
   await db.query(
     `INSERT INTO supplier_catalog_items
        (supplier, supplier_ref, supplier_sku_ref, item_name, brand_name, face_value,
-        currency, region, cost_price, match_key, suggested_sku_id, status, raw_payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?)
+        currency, face_value_currency, region, cost_price, match_key, suggested_sku_id, status, raw_payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?)
      ON DUPLICATE KEY UPDATE
        item_name = VALUES(item_name), brand_name = VALUES(brand_name), face_value = VALUES(face_value),
-       currency = VALUES(currency), region = VALUES(region), cost_price = VALUES(cost_price),
-       match_key = VALUES(match_key), suggested_sku_id = VALUES(suggested_sku_id),
+       currency = VALUES(currency), face_value_currency = VALUES(face_value_currency), region = VALUES(region),
+       cost_price = VALUES(cost_price), match_key = VALUES(match_key), suggested_sku_id = VALUES(suggested_sku_id),
        raw_payload = VALUES(raw_payload)
        -- deliberately NOT touching status — a re-sync of an item an admin
        -- already reviewed (linked/rejected/ignored) must not reset it back
        -- to pending_review`,
     [supplier, supplierRef || null, String(supplierSkuRef), itemName, brandName || null,
-      faceValue ?? null, currency || null, region || null, costPrice ?? null,
+      faceValue ?? null, currency || null, faceValueCurrency || currency || null, region || null, costPrice ?? null,
       matchKey || null, suggestedSkuId || null, rawPayload ? JSON.stringify(rawPayload) : null]
   );
 }

@@ -38,6 +38,27 @@ describe('supplierLinks.repository', () => {
     expect(db.query).toHaveBeenCalledWith(expect.any(String), [null, 1]);
   });
 
+  test('upsertStagingItem writes face_value_currency, falling back to currency when not given', async () => {
+    db.query.mockResolvedValueOnce(undefined);
+    await repo.upsertStagingItem({
+      supplier: 'gift2games', supplierSkuRef: 'g2g-2', itemName: 'Apple UK Card', brandName: 'Apple',
+      currency: 'USD', faceValueCurrency: 'GBP',
+    });
+    expect(db.query.mock.calls[0][1]).toEqual(
+      expect.arrayContaining(['USD', 'GBP'])
+    );
+
+    db.query.mockResolvedValueOnce(undefined);
+    await repo.upsertStagingItem({
+      supplier: 'wgcards', supplierSkuRef: 'wg-2', itemName: 'Xbox Card', brandName: 'Xbox',
+      currency: 'USD', // no faceValueCurrency passed at all
+    });
+    // face_value_currency param falls back to currency (both 'USD') when the
+    // caller doesn't have a separate value to give it.
+    const params = db.query.mock.calls[1][1];
+    expect(params.filter((p) => p === 'USD')).toHaveLength(2);
+  });
+
   test('upsertStagingItem never resets status on a re-sync (comment/SQL says so, verify the SQL omits status from the UPDATE clause)', async () => {
     db.query.mockResolvedValueOnce(undefined);
     await repo.upsertStagingItem({

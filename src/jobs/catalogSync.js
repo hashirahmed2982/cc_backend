@@ -255,6 +255,10 @@ async function stageSku(itemRaw, sku, mapped) {
     brandName: itemRaw.itemBrandName || null,
     faceValue: mapped.faceValue,
     currency: mapped.priceCurrency,
+    // WgCards exposes only one price/currency pair (see mapSkuForUpsert) —
+    // unlike Gift2Games, there's no separate face-value currency to carry,
+    // so this is deliberately the same value as `currency` above.
+    faceValueCurrency: mapped.priceCurrency,
     region: null, // WgCards' getItem doesn't expose one either
     costPrice: mapped.costPrice,
     matchKey: await buildMatchKey(itemRaw, mapped),
