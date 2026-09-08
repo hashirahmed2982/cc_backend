@@ -228,6 +228,30 @@ describe('cancelOrder', () => {
     await expect(orderService.cancelOrder(1, 99, '')).rejects.toThrow(/already cancelled/);
   });
 
+  // Real gap this closes: the admin UI hides the Cancel button once an
+  // order is 'completed' (isCancellable()), but that was a UI-only
+  // guard — reachable directly via the API otherwise, producing a $0
+  // refund with the order flipped to 'cancelled' while its lines still
+  // say 'completed'.
+  test('throws when the order is already fully completed', async () => {
+    const conn = fakeConn([[[{ ...orderRow, order_status: 'completed' }]]]);
+    db.getConnection.mockResolvedValueOnce(conn);
+    await expect(orderService.cancelOrder(1, 99, '')).rejects.toThrow(/already been fully completed/);
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  test('guard errors are AppErrors (isOperational), not plain Errors — otherwise errorHandler.js swallows the real message into a generic 500', async () => {
+    const conn = fakeConn([[[]]]); // order not found
+    db.getConnection.mockResolvedValueOnce(conn);
+    try {
+      await orderService.cancelOrder(999, 99, '');
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect(err.isOperational).toBe(true);
+      expect(err.statusCode).toBe(404);
+    }
+  });
+
   test('a line with NO supplier order placed -> marked failed immediately, full refund', async () => {
     const conn = fakeConn([
       [[orderRow]],

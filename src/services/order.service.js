@@ -12,6 +12,7 @@ const supplierSelection = require('./supplierSelection.service');
 const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 const { decrypt } = require('../utils/dataCrypto');
+const { AppError } = require('../middleware/errorHandler');
 
 // ─── Generate order number ────────────────────────────────────────────────────
 function generateOrderNumber() {
@@ -584,9 +585,22 @@ class OrderService {
           WHERE o.order_id = ?`,
         [orderId]
       );
-      if (!orderRows.length) throw new Error('Order not found');
+      // AppError (not a plain Error) on all three of these — a plain
+      // Error has no isOperational flag, so errorHandler.js's production
+      // branch swallows it into a generic "Something went wrong" 500
+      // instead of surfacing the real reason. That defeats the point of
+      // a guard whose whole job is telling the admin why nothing happened.
+      if (!orderRows.length) throw new AppError('Order not found', 404);
       const order = orderRows[0];
-      if (order.order_status === 'cancelled') throw new Error('Order is already cancelled');
+      if (order.order_status === 'cancelled') throw new AppError('Order is already cancelled', 400);
+      // Mirrors the admin portal's own isCancellable() gate, which already
+      // hides the Cancel button once an order is completed — but that's a
+      // UI-only guard. Reachable directly via the API otherwise: every
+      // line is already delivered, so cancelling would produce a $0
+      // refund while flipping order_status to 'cancelled' with every line
+      // still saying 'completed' — a real, confusing inconsistency, not
+      // just a UI nicety this closes.
+      if (order.order_status === 'completed') throw new AppError('Cannot cancel an order that has already been fully completed.', 400);
 
       const [detailRows] = await conn.execute(
         `SELECT od.*, p.product_name FROM order_details od

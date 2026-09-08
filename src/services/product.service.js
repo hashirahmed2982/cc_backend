@@ -9,6 +9,8 @@ const { encrypt, decrypt, hashCode } = require('../utils/dataCrypto');
 const { DIRECT_TOPUP_SPU_TYPE } = require('../utils/wgcardsConstants');
 const { assertSellingPriceAboveCost } = require('../utils/priceGuard');
 const supplierLinksRepo = require('../repositories/supplierLinks.repository');
+const wgcardsService = require('./wgcards.service');
+const gift2gamesService = require('./gift2games.service');
 
 const IMAGE_DIR = path.join(__dirname, '../../uploads/products'); // matches routes/product.routes.js
 
@@ -555,9 +557,15 @@ class ProductService {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  SUPPLIER STOCK CHECK  (stub — replace with real API when ready)
+  //  SUPPLIER STOCK CHECK
   // ══════════════════════════════════════════════════════════════════════════
 
+  /** Live per-supplier stock check — was a stub that always returned
+   * available:true for any supplier-sourced product regardless of real
+   * stock (flagged in the audit as "a live endpoint that lies if anything
+   * calls it"). Now actually asks the supplier, using the same API each
+   * job already relies on for the same data (getStock — stockSync.js;
+   * getProducts' inStock field — gift2gamesCatalogSync.js/StockSync.js). */
   async checkSupplierStock(productId) {
     try {
       const product = await this.getById(productId);
@@ -565,9 +573,39 @@ class ProductService {
       if (product.source === 'internal') {
         return { available: product.availableCodes > 0, stockLevel: this._stockLevel(product), price: product.price };
       }
-      // TODO: Replace with real supplier API call
-      // const result = await supplierService.checkStock(product.supplierSkuRef);
-      return { available: true, stockLevel: 'live', price: product.price, note: 'Real-time — API not yet connected' };
+
+      if (!product.supplierSkuRef) {
+        return { available: false, stockLevel: 'unknown', price: product.price, note: 'No supplier SKU reference recorded for this product — cannot check live stock.' };
+      }
+
+      if (product.source === 'wgcards') {
+        const stockEntries = await wgcardsService.getStock([product.supplierSkuRef]);
+        const entry = (stockEntries || []).find((e) => String(e.skuId) === String(product.supplierSkuRef));
+        if (!entry) {
+          return { available: false, stockLevel: 'unknown', price: product.price, note: 'WgCards did not return stock data for this SKU.' };
+        }
+        const unlimited = entry.number === -1; // -1 is WgCards' own "unlimited" sentinel — see stockSync.js
+        const remoteQuantity = unlimited ? null : Number(entry.number) || 0;
+        return {
+          available: unlimited || remoteQuantity > 0,
+          stockLevel: unlimited ? 'unlimited' : (remoteQuantity > 0 ? 'live' : 'out_of_stock'),
+          price: product.price,
+          remoteQuantity,
+        };
+      }
+
+      if (product.source === 'gift2games') {
+        const products = await gift2gamesService.getProducts({ ids: [product.supplierSkuRef] });
+        const entry = (products || []).find((p) => String(p.id) === String(product.supplierSkuRef));
+        if (!entry) {
+          return { available: false, stockLevel: 'unknown', price: product.price, note: 'Gift2Games did not return this product.' };
+        }
+        return { available: !!entry.inStock, stockLevel: entry.inStock ? 'live' : 'out_of_stock', price: product.price };
+      }
+
+      // An unrecognized source string shouldn't happen (products.source is
+      // an ENUM), but fails honestly rather than silently claiming stock.
+      return { available: true, stockLevel: 'unknown', price: product.price, note: `Unrecognized supplier "${product.source}" — cannot check live stock.` };
     } catch (err) { logger.error('ProductService.checkSupplierStock:', err); throw err; }
   }
   // ══════════════════════════════════════════════════════════════════════════

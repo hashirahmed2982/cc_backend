@@ -43,14 +43,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Only ever delivers exactly one unit per createOrder call (Gift2Games'
- * create_order has no buyNum/quantity parameter — see gift2games.service.js
- * createOrder's own comment — so a quantity>1 line only gets one delivered
- * here; any remainder is left pending, and — a known limitation — nothing
- * currently re-drives additional createOrder calls for the rest, since
- * Gift2Games products are 1-unit-per-purchase in every case tested so
- * far). Thin wrapper so this file's calls read the same as before the
- * shared-writer extraction. */
+/** Delivers exactly one unit — Gift2Games' create_order has no buyNum/
+ * quantity parameter (see gift2games.service.js createOrder's own
+ * comment), so one createOrder call only ever buys one unit.
+ * attemptGift2GamesFulfillment below loops this per unit for a
+ * quantity>1 line. Thin wrapper so this file's calls read the same as
+ * before the shared-writer extraction. */
 async function _deliverImmediately(args) {
   return deliverCode(args);
 }
@@ -87,6 +85,52 @@ async function attemptGift2GamesFulfillment({ orderId, item, currency = 'USD', l
     };
   }
 
+  // Gift2Games' create_order has no buyNum/quantity parameter (confirmed —
+  // see gift2games.service.js's createOrder comment), so one call only
+  // ever buys one unit. A quantity>1 line used to just place ONE unit and
+  // silently leave the rest pending forever (a known, documented
+  // limitation — see this file's header). Fixed: place up to
+  // item.quantity SEPARATE createOrder calls in sequence, each its own
+  // fully idempotency-safe attempt (_placeSingleUnit below is exactly the
+  // single-unit logic this function used to run inline, unchanged).
+  //
+  // Stops the moment a unit doesn't deliver SYNCHRONOUSLY — either it
+  // failed outright, or it placed but only went pending (a genuinely
+  // async product/status). order_details has room for exactly ONE
+  // gift2games_order_id/gift2games_reference_number at a time; racing
+  // ahead to place more units while one is still unresolved would
+  // overwrite the only pointer the poller has to ever resolve it. The
+  // remaining quantity is picked up on the next fulfillment pass once
+  // delivered_qty reflects what already landed (same mechanism
+  // order.service.js#_fulfillOrder already uses for local-vs-supplier
+  // shortfalls).
+  const deliveredCodes = [];
+  let lastResult = null;
+
+  for (let unit = 0; unit < item.quantity; unit++) {
+    lastResult = await _placeSingleUnit({ orderId, item, link, retryDelaysMs });
+    if (!lastResult.success) break;
+    if (lastResult.delivered) {
+      deliveredCodes.push(...lastResult.codes);
+      continue; // synchronous delivery confirmed for this unit — safe to place the next one
+    }
+    break; // placed but only pending — stop, let the poller resolve it first
+  }
+
+  if (deliveredCodes.length === 0) {
+    // Nothing delivered this call — return the single attempt's own
+    // result verbatim (identical shape to the old single-unit function:
+    // success:true+pending, or success:false+reason).
+    return lastResult;
+  }
+  return { ...lastResult, delivered: true, codes: deliveredCodes };
+}
+
+/** One createOrder attempt for exactly one unit, with its own retry/Flow H
+ * idempotency handling — this is the ENTIRE body attemptGift2GamesFulfillment
+ * used to run inline for its one-and-only unit; extracted verbatim so
+ * multi-unit lines can call it once per unit above. */
+async function _placeSingleUnit({ orderId, item, link, retryDelaysMs }) {
   const referenceNumber = uuidv4();
   let lastError;
 

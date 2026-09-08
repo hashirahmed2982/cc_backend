@@ -6,9 +6,13 @@ jest.mock('../../config/database', () => ({
   queryOne: jest.fn(),
 }));
 jest.mock('../../repositories/supplierLinks.repository');
+jest.mock('../wgcards.service');
+jest.mock('../gift2games.service');
 
 const db = require('../../config/database');
 const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
+const wgcardsService = require('../wgcards.service');
+const gift2gamesService = require('../gift2games.service');
 const productService = require('../product.service');
 
 function fakeConn() {
@@ -241,6 +245,89 @@ describe('product.service price guard (admin cannot undercut supplier/internal c
         product_id: 1, product_name: 'X', source: 'wgcards', linked_suppliers: 'gift2games,wgcards',
       });
       expect(result.linkedSources).toEqual(['wgcards', 'gift2games']);
+    });
+  });
+
+  // Real gap this closes (audit finding #8): this used to be a stub that
+  // always returned available:true for any supplier-sourced product
+  // regardless of real stock. Now actually asks the supplier.
+  describe('checkSupplierStock', () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    test('internal product: unchanged, uses local availableCodes/stockLevel, no supplier call', async () => {
+      jest.spyOn(productService, 'getById').mockResolvedValueOnce({
+        source: 'internal', availableCodes: 5, totalCodes: 10, price: 9.99,
+      });
+
+      const result = await productService.checkSupplierStock(1);
+
+      expect(result).toMatchObject({ available: true, price: 9.99 });
+      expect(wgcardsService.getStock).not.toHaveBeenCalled();
+      expect(gift2gamesService.getProducts).not.toHaveBeenCalled();
+    });
+
+    test('wgcards product: a real positive quantity from getStock -> available, live, with the remote count', async () => {
+      jest.spyOn(productService, 'getById').mockResolvedValueOnce({
+        source: 'wgcards', supplierSkuRef: '12345', price: 4.5,
+      });
+      wgcardsService.getStock.mockResolvedValueOnce([{ skuId: '12345', number: 7 }]);
+
+      const result = await productService.checkSupplierStock(1);
+
+      expect(wgcardsService.getStock).toHaveBeenCalledWith(['12345']);
+      expect(result).toEqual({ available: true, stockLevel: 'live', price: 4.5, remoteQuantity: 7 });
+    });
+
+    test('wgcards product: number -1 is the unlimited sentinel, not "-1 in stock"', async () => {
+      jest.spyOn(productService, 'getById').mockResolvedValueOnce({ source: 'wgcards', supplierSkuRef: '12345', price: 4.5 });
+      wgcardsService.getStock.mockResolvedValueOnce([{ skuId: '12345', number: -1 }]);
+
+      const result = await productService.checkSupplierStock(1);
+
+      expect(result).toEqual({ available: true, stockLevel: 'unlimited', price: 4.5, remoteQuantity: null });
+    });
+
+    test('wgcards product: zero stock -> available:false, out_of_stock, never claims true', async () => {
+      jest.spyOn(productService, 'getById').mockResolvedValueOnce({ source: 'wgcards', supplierSkuRef: '12345', price: 4.5 });
+      wgcardsService.getStock.mockResolvedValueOnce([{ skuId: '12345', number: 0 }]);
+
+      const result = await productService.checkSupplierStock(1);
+
+      expect(result).toEqual({ available: false, stockLevel: 'out_of_stock', price: 4.5, remoteQuantity: 0 });
+    });
+
+    test('wgcards product: getStock returns no matching entry -> honest "unknown", not a lie', async () => {
+      jest.spyOn(productService, 'getById').mockResolvedValueOnce({ source: 'wgcards', supplierSkuRef: '12345', price: 4.5 });
+      wgcardsService.getStock.mockResolvedValueOnce([]);
+
+      const result = await productService.checkSupplierStock(1);
+
+      expect(result).toMatchObject({ available: false, stockLevel: 'unknown' });
+    });
+
+    test('gift2games product: inStock true/false is read straight from getProducts', async () => {
+      jest.spyOn(productService, 'getById')
+        .mockResolvedValueOnce({ source: 'gift2games', supplierSkuRef: '999', price: 2.5 })
+        .mockResolvedValueOnce({ source: 'gift2games', supplierSkuRef: '999', price: 2.5 });
+      gift2gamesService.getProducts
+        .mockResolvedValueOnce([{ id: '999', inStock: true }])
+        .mockResolvedValueOnce([{ id: '999', inStock: false }]);
+
+      const inStockResult = await productService.checkSupplierStock(1);
+      expect(gift2gamesService.getProducts).toHaveBeenCalledWith({ ids: ['999'] });
+      expect(inStockResult).toMatchObject({ available: true, stockLevel: 'live' });
+
+      const outOfStockResult = await productService.checkSupplierStock(1);
+      expect(outOfStockResult).toMatchObject({ available: false, stockLevel: 'out_of_stock' });
+    });
+
+    test('no supplierSkuRef recorded -> refuses to check rather than guessing', async () => {
+      jest.spyOn(productService, 'getById').mockResolvedValueOnce({ source: 'wgcards', supplierSkuRef: null, price: 4.5 });
+
+      const result = await productService.checkSupplierStock(1);
+
+      expect(result).toMatchObject({ available: false, stockLevel: 'unknown' });
+      expect(wgcardsService.getStock).not.toHaveBeenCalled();
     });
   });
 });

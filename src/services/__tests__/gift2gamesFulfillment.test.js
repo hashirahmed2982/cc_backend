@@ -147,4 +147,59 @@ describe('attemptGift2GamesFulfillment', () => {
     expect(result).toMatchObject({ success: false, reason: 'supplier_timeout' });
     expect(gift2gamesService.createOrder).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
   });
+
+  // Real gap this closes (audit finding #9): create_order has no
+  // buyNum/quantity param, so a quantity>1 line used to only ever place
+  // ONE unit and silently leave the rest pending forever, with nothing
+  // re-driving additional purchases.
+  describe('quantity > 1 — places one createOrder call per unit', () => {
+    test('3 units, all deliver synchronously -> 3 separate createOrder calls, all 3 codes collected', async () => {
+      gift2gamesService.createOrder
+        .mockResolvedValueOnce({ orderId: 'G2G-1', orderStatus: 'Completed', code: 'CODE-1' })
+        .mockResolvedValueOnce({ orderId: 'G2G-2', orderStatus: 'Completed', code: 'CODE-2' })
+        .mockResolvedValueOnce({ orderId: 'G2G-3', orderStatus: 'Completed', code: 'CODE-3' });
+
+      const result = await attemptGift2GamesFulfillment({ orderId: 1, item: { skuId: 5, quantity: 3 }, link });
+
+      expect(gift2gamesService.createOrder).toHaveBeenCalledTimes(3);
+      // Each call is its own idempotency-safe unit — a distinct referenceNumber per call.
+      const refs = gift2gamesService.createOrder.mock.calls.map(([args]) => args.referenceNumber);
+      expect(new Set(refs).size).toBe(3);
+      expect(result).toMatchObject({ success: true, delivered: true, codes: ['CODE-1', 'CODE-2', 'CODE-3'] });
+      // The single order_details reference/order-id columns end up holding
+      // the LAST unit's identifiers — the only ones the schema has room for.
+      expect(result.gift2gamesOrderId).toBe('G2G-3');
+    });
+
+    test('3 units requested, 2nd goes pending (async, no extractable code) -> stops there, only 1 code delivered, 3rd unit never attempted', async () => {
+      gift2gamesService.createOrder
+        .mockResolvedValueOnce({ orderId: 'G2G-1', orderStatus: 'Completed', code: 'CODE-1' })
+        .mockResolvedValueOnce({ orderId: 'G2G-2', orderStatus: 'Processing' }); // no extractable code
+
+      const result = await attemptGift2GamesFulfillment({ orderId: 1, item: { skuId: 5, quantity: 3 }, link });
+
+      expect(gift2gamesService.createOrder).toHaveBeenCalledTimes(2); // 3rd unit never attempted — 2nd is still unresolved
+      expect(result).toMatchObject({ success: true, delivered: true, codes: ['CODE-1'] });
+    });
+
+    test('3 units requested, 1st fails outright (business rejection) -> stops immediately, nothing delivered, only 1 call made', async () => {
+      gift2gamesService.createOrder.mockRejectedValueOnce(
+        Object.assign(new Error('rejected'), { code: 'supplier_business_rejection' })
+      );
+
+      const result = await attemptGift2GamesFulfillment({ orderId: 1, item: { skuId: 5, quantity: 3 }, link });
+
+      expect(gift2gamesService.createOrder).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ success: false, reason: 'supplier_rejected' });
+    });
+
+    test('quantity=1 behavior is completely unchanged: exactly one call, same result shape as before this fix', async () => {
+      gift2gamesService.createOrder.mockResolvedValueOnce({ orderId: 'G2G-1', orderStatus: 'Completed', code: 'CODE-1' });
+
+      const result = await attemptGift2GamesFulfillment({ orderId: 1, item: { skuId: 5, quantity: 1 }, link });
+
+      expect(gift2gamesService.createOrder).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ success: true, delivered: true, codes: ['CODE-1'], gift2gamesOrderId: 'G2G-1' });
+    });
+  });
 });
