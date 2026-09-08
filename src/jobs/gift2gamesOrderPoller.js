@@ -18,6 +18,18 @@
 //   24–72h: every 2 hours  (flagged "delayed")
 //   >72h:   every 6 hours  (flagged "delayed_needs_admin_decision")
 //
+// One more thing this job has to handle: an ADMIN cancelling the order
+// locally (order.service.js#cancelOrder) while this line's supplier order
+// is already placed. Gift2Games (like WgCards) has no cancel/refund API,
+// so cancelOrder deliberately leaves such a line pending/partial instead
+// of marking it failed — this job keeps polling it like any other
+// in-flight line. If a code does show up, it's routed through
+// gift2gamesDeliveryWriter.js#recoverAsSpareInventory instead of
+// deliverCode: the customer was already refunded, so the code is parked
+// as unassigned spare stock (sellable to the next buyer) rather than
+// credited to a closed order — the only real cost recovery available
+// without a supplier-side cancel API.
+//
 // Usage:
 //   node src/jobs/gift2gamesOrderPoller.js
 'use strict';
@@ -29,7 +41,7 @@ const logger = require('../utils/logger');
 const gift2gamesService = require('../services/gift2games.service');
 const orderService = require('../services/order.service');
 const { extractDeliveredCode, isFailedStatus } = require('../utils/gift2gamesDelivery');
-const { deliverCode, markFailed } = require('../services/gift2gamesDeliveryWriter');
+const { deliverCode, recoverAsSpareInventory, markFailed } = require('../services/gift2gamesDeliveryWriter');
 
 async function getZipPassword(userId) {
   const row = await db.queryOne('SELECT zip_password FROM users WHERE user_id = ?', [userId]);
@@ -92,16 +104,18 @@ async function recalculateOrderStatus(orderId) {
   const incompleteLines = parseInt(rows[0].incompleteLines, 10);
   const orderStatus = incompleteLines === 0 ? 'completed' : 'processing';
   const deliveryStatus = incompleteLines === 0 ? 'completed' : 'partial';
+  // Hard guard, not just a courtesy — see orderPoller.js's identical guard
+  // for the full reasoning. Must never resurrect a cancelled order.
   await db.query(
     `UPDATE orders SET order_status = ?, delivery_status = ?, completed_at = ${orderStatus === 'completed' ? 'NOW()' : 'NULL'}
-     WHERE order_id = ?`,
+     WHERE order_id = ? AND order_status != 'cancelled'`,
     [orderStatus, deliveryStatus, orderId]
   );
 }
 
 async function run() {
   const candidates = await db.query(
-    `SELECT od.*, o.order_number, o.currency, u.user_id AS client_user_id, u.full_name, u.email
+    `SELECT od.*, o.order_number, o.currency, o.order_status, u.user_id AS client_user_id, u.full_name, u.email
        FROM order_details od
        JOIN orders o ON o.order_id = od.order_id
        JOIN users u ON u.user_id = o.user_id
@@ -109,7 +123,7 @@ async function run() {
         AND od.delivery_status IN ('pending', 'partial')`
   );
 
-  const summary = { candidates: candidates.length, polled: 0, delivered: 0, failed: 0, errors: [] };
+  const summary = { candidates: candidates.length, polled: 0, delivered: 0, recovered: 0, failed: 0, errors: [] };
   const deliveredThisRunByOrder = new Map(); // orderId -> [{productId, skuId, quantity, delivered, codes}]
 
   for (const row of candidates) {
@@ -131,25 +145,45 @@ async function run() {
     if (delivered) {
       try {
         const rawResponseJson = (() => { try { return JSON.stringify(result); } catch { return null; } })();
-        const code = await deliverCode({
-          orderId: row.order_id,
-          skuId: row.sku_id,
-          referenceNumber: row.gift2games_reference_number,
-          gift2gamesOrderId: row.gift2games_order_id,
-          rawResponseJson,
-          delivered,
-        });
-        summary.delivered++;
+        if (row.order_status === 'cancelled') {
+          // The order was cancelled (and the customer refunded) before
+          // this code arrived — recover it as spare stock instead of
+          // crediting a closed order. No completion email, no
+          // deliveredThisRunByOrder entry — that order stays cancelled.
+          await recoverAsSpareInventory({
+            skuId: row.sku_id,
+            orderDetailId: row.order_detail_id,
+            referenceNumber: row.gift2games_reference_number,
+            gift2gamesOrderId: row.gift2games_order_id,
+            rawResponseJson,
+            delivered,
+          });
+          summary.recovered++;
+          logger.info(
+            `gift2gamesOrderPoller: order ${row.order_id} was cancelled before delivery — recovered 1 code for ` +
+            `order_detail ${row.order_detail_id} as spare inventory instead of crediting the cancelled order.`
+          );
+        } else {
+          const code = await deliverCode({
+            orderId: row.order_id,
+            skuId: row.sku_id,
+            referenceNumber: row.gift2games_reference_number,
+            gift2gamesOrderId: row.gift2games_order_id,
+            rawResponseJson,
+            delivered,
+          });
+          summary.delivered++;
 
-        if (!deliveredThisRunByOrder.has(row.order_id)) deliveredThisRunByOrder.set(row.order_id, []);
-        deliveredThisRunByOrder.get(row.order_id).push({
-          productId: row.product_id,
-          productName: null, // filled in below once we know we need it
-          skuId: row.sku_id,
-          quantity: 1,
-          delivered: 1,
-          codes: [code],
-        });
+          if (!deliveredThisRunByOrder.has(row.order_id)) deliveredThisRunByOrder.set(row.order_id, []);
+          deliveredThisRunByOrder.get(row.order_id).push({
+            productId: row.product_id,
+            productName: null, // filled in below once we know we need it
+            skuId: row.sku_id,
+            quantity: 1,
+            delivered: 1,
+            codes: [code],
+          });
+        }
       } catch (err) {
         logger.warn(`gift2gamesOrderPoller: found a deliverable code but writing it failed for order_detail ${row.order_detail_id}:`, err.message);
         summary.errors.push({ orderDetailId: row.order_detail_id, error: err.message });

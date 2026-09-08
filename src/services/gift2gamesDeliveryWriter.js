@@ -38,6 +38,36 @@ async function deliverCode({ orderId, skuId, referenceNumber, gift2gamesOrderId,
   });
 }
 
+/** A code arrived for a line whose order was cancelled before delivery.
+ * Mirrors orderPoller.js's recoverAsSpareInventory() for WgCards — see its
+ * comment for the full reasoning (no supplier cancel/refund API exists for
+ * either vendor, so this is the only real cost recovery available: park
+ * the code as unassigned spare stock instead of crediting a closed order).
+ * Deliberately does NOT bump delivered_qty — nothing was delivered to
+ * THIS order. Caller must not treat this as a normal delivery (no
+ * completion email, no order-status recalculation). */
+async function recoverAsSpareInventory({ skuId, orderDetailId, referenceNumber, gift2gamesOrderId, rawResponseJson, delivered }) {
+  return db.transaction(async (conn) => {
+    await conn.execute(
+      `INSERT INTO digital_codes (sku_id, code, pin_code, sn_code, status, order_id, source)
+       VALUES (?, ?, ?, ?, 'available', NULL, 'gift2games_api')`,
+      [
+        skuId,
+        encrypt(delivered.code),
+        delivered.pin ? encrypt(delivered.pin) : null,
+        delivered.serial ? encrypt(delivered.serial) : null,
+      ]
+    );
+    await conn.execute(
+      `UPDATE order_details
+          SET delivery_status = 'failed', pending_reason = 'recovered_as_spare_inventory',
+              gift2games_reference_number = ?, gift2games_order_id = ?, gift2games_raw_response = ?
+        WHERE order_detail_id = ?`,
+      [referenceNumber, gift2gamesOrderId, rawResponseJson ? encrypt(rawResponseJson) : null, orderDetailId]
+    );
+  });
+}
+
 /** Persists the reference/order id (+ raw response for admin visibility)
  * without delivering anything — the not-yet-delivered path. */
 async function markPending({ orderId, skuId, referenceNumber, gift2gamesOrderId, rawResponseJson, reason }) {
@@ -59,4 +89,4 @@ async function markFailed(orderId, skuId, reason) {
   );
 }
 
-module.exports = { deliverCode, markPending, markFailed };
+module.exports = { deliverCode, recoverAsSpareInventory, markPending, markFailed };

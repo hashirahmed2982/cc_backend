@@ -16,9 +16,22 @@
 //           so for now this just means "clearly visible in pending_reason
 //           and logged loudly", not an actual notification)
 //
-// deliveryStatus 4/5 (cancelled) is marked and left for a human — nothing
-// auto-refunds here, matching the doc: "Nothing auto-refunds before the
-// 72-hour mark for either supplier" and Flow I being manual-admin-only.
+// deliveryStatus 4/5 (cancelled BY WGCARDS) is marked and left for a
+// human — nothing auto-refunds here, matching the doc: "Nothing
+// auto-refunds before the 72-hour mark for either supplier" and Flow I
+// being manual-admin-only.
+//
+// A DIFFERENT cancellation this job also has to handle: an ADMIN
+// cancelling the order locally (order.service.js#cancelOrder) while this
+// line's supplier order is already placed. Neither supplier exposes a
+// cancel/refund API, so cancelOrder deliberately leaves such a line
+// pending/partial instead of marking it failed — this job keeps polling
+// it exactly like any other in-flight line. If a code does show up, it's
+// routed through recoverAsSpareInventory() instead of deliverCodes(): the
+// customer was already refunded, so the code is parked as unassigned
+// spare stock (sellable to the next buyer) rather than credited to a
+// closed order — the only real cost recovery available without a
+// supplier-side cancel API.
 //
 // Usage:
 //   node src/jobs/orderPoller.js
@@ -114,6 +127,39 @@ async function markPendingReason(orderDetailId, reason) {
   await db.query('UPDATE order_details SET pending_reason = ? WHERE order_detail_id = ?', [reason, orderDetailId]);
 }
 
+/** A code arrived for a line whose order was cancelled before delivery.
+ * Neither supplier exposes a cancel/refund API (confirmed) — the customer
+ * was already refunded by cancelOrder, and there's no way to claw back
+ * what was already paid to the supplier. The only real recovery is to not
+ * waste the code: park it as unassigned spare stock (sellable to the next
+ * customer for this SKU) instead of crediting an order that's already
+ * closed. Deliberately does NOT touch delivered_qty (nothing was
+ * delivered to THIS order) and the caller must NOT feed this into
+ * deliveredThisRunByOrder — no completion email, no order-status
+ * recalculation; that order stays cancelled, permanently. */
+async function recoverAsSpareInventory(orderDetailRow, newRecords) {
+  return db.transaction(async (conn) => {
+    for (const rec of newRecords) {
+      const codeValue = rec.card || rec.pinCode || rec.snCode || '';
+      await conn.execute(
+        `INSERT INTO digital_codes (sku_id, code, pin_code, sn_code, status, order_id, source)
+         VALUES (?, ?, ?, ?, 'available', NULL, 'wgcards_api')`,
+        [
+          orderDetailRow.sku_id,
+          encrypt(codeValue),
+          rec.pinCode ? encrypt(rec.pinCode) : null,
+          rec.snCode ? encrypt(rec.snCode) : null,
+        ]
+      );
+    }
+    await conn.execute(
+      `UPDATE order_details SET delivery_status = 'failed', pending_reason = 'recovered_as_spare_inventory', last_polled_at = NOW()
+        WHERE order_detail_id = ?`,
+      [orderDetailRow.order_detail_id]
+    );
+  });
+}
+
 /** Atomically writes newly-delivered codes + bumps delivered_qty. Returns the decrypted plaintext codes (for the email). */
 async function deliverCodes(orderDetailRow, newRecords) {
   return db.transaction(async (conn) => {
@@ -161,9 +207,14 @@ async function recalculateOrderStatus(orderId) {
   const incompleteLines = parseInt(rows[0].incompleteLines, 10);
   const orderStatus = incompleteLines === 0 ? 'completed' : 'processing';
   const deliveryStatus = incompleteLines === 0 ? 'completed' : 'partial';
+  // Hard guard, not just a courtesy: this must never resurrect a cancelled
+  // order, even if some future call path reaches here for one (the run()
+  // loop already avoids that by routing a cancelled order's deliveries
+  // through recoverAsSpareInventory instead of deliverCodes/this
+  // function — this is the second, structural line of defense).
   await db.query(
     `UPDATE orders SET order_status = ?, delivery_status = ?, completed_at = ${orderStatus === 'completed' ? 'NOW()' : 'NULL'}
-     WHERE order_id = ?`,
+     WHERE order_id = ? AND order_status != 'cancelled'`,
     [orderStatus, deliveryStatus, orderId]
   );
 }
@@ -177,7 +228,7 @@ async function getZipPassword(userId) {
 
 async function run() {
   const candidates = await db.query(
-    `SELECT od.*, o.order_number, o.currency, u.user_id AS client_user_id, u.full_name, u.email
+    `SELECT od.*, o.order_number, o.currency, o.order_status, u.user_id AS client_user_id, u.full_name, u.email
        FROM order_details od
        JOIN orders o ON o.order_id = od.order_id
        JOIN users u ON u.user_id = o.user_id
@@ -185,7 +236,7 @@ async function run() {
         AND od.delivery_status IN ('pending', 'partial')`
   );
 
-  const summary = { candidates: candidates.length, polled: 0, delivered: 0, cancelled: 0, errors: [] };
+  const summary = { candidates: candidates.length, polled: 0, delivered: 0, recovered: 0, cancelled: 0, errors: [] };
   const deliveredThisRunByOrder = new Map(); // orderId -> { fulfilledItems: [...] }
 
   for (const row of candidates) {
@@ -230,18 +281,31 @@ async function run() {
         const allRecords = buyCard?.records || [];
         const fresh = newRecordsSince(allRecords, row.delivered_qty);
         if (fresh.length > 0) {
-          const codes = await deliverCodes(row, fresh);
-          summary.delivered += fresh.length;
+          if (row.order_status === 'cancelled') {
+            // The order was cancelled (and the customer refunded) before
+            // this code arrived — recover it as spare stock instead of
+            // crediting a closed order. No completion email, no
+            // deliveredThisRunByOrder entry — that order stays cancelled.
+            await recoverAsSpareInventory(row, fresh);
+            summary.recovered += fresh.length;
+            logger.info(
+              `orderPoller: order ${row.order_id} was cancelled before delivery — recovered ${fresh.length} code(s) ` +
+              `for order_detail ${row.order_detail_id} as spare inventory instead of crediting the cancelled order.`
+            );
+          } else {
+            const codes = await deliverCodes(row, fresh);
+            summary.delivered += fresh.length;
 
-          if (!deliveredThisRunByOrder.has(row.order_id)) deliveredThisRunByOrder.set(row.order_id, []);
-          deliveredThisRunByOrder.get(row.order_id).push({
-            productId: row.product_id,
-            productName: null, // filled in below once we know we need it
-            skuId: row.sku_id,
-            quantity: fresh.length,
-            delivered: fresh.length,
-            codes,
-          });
+            if (!deliveredThisRunByOrder.has(row.order_id)) deliveredThisRunByOrder.set(row.order_id, []);
+            deliveredThisRunByOrder.get(row.order_id).push({
+              productId: row.product_id,
+              productName: null, // filled in below once we know we need it
+              skuId: row.sku_id,
+              quantity: fresh.length,
+              delivered: fresh.length,
+              codes,
+            });
+          }
         } else {
           await markPolled(row.order_detail_id);
         }

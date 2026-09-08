@@ -76,6 +76,37 @@ describe('gift2gamesOrderPoller.run', () => {
     const [, , , fulfillResult] = orderService._sendCompletionEmail.mock.calls[0];
     expect(fulfillResult.fulfilledItems[0].codes).toEqual(['ABCD-1234']);
     expect(fulfillResult.fulfilledItems[0].productName).toBe('Some Gift Card');
+    // Structural guard against ever resurrecting a cancelled order — must
+    // be present even on this ordinary non-cancelled path.
+    expect(db.query.mock.calls[3][0]).toContain("order_status != 'cancelled'");
+  });
+
+  // Neither supplier exposes a cancel/refund API — an admin cancelling the
+  // LOCAL order (order.service.js#cancelOrder) can't stop a supplier order
+  // already in flight. If a code shows up anyway after that, it must be
+  // recovered as spare stock, not credited to the now-refunded order.
+  test('getOrderDetails now returns a code, but the order was already cancelled by an admin before it arrived -> recovers as spare inventory, no email, no order-status recalculation at all', async () => {
+    db.query.mockResolvedValueOnce([{ ...baseRow, order_status: 'cancelled' }]); // candidates query — only db.query call expected
+    const execute = jest.fn().mockResolvedValue([{}]);
+    db.transaction.mockImplementation(async (cb) => cb({ execute }));
+
+    gift2gamesService.getOrderDetails.mockResolvedValueOnce({ orderStatus: 'Completed', code: 'ABCD-1234' });
+
+    const summary = await run();
+
+    expect(summary.recovered).toBe(1);
+    expect(summary.delivered).toBe(0);
+    expect(orderService._sendCompletionEmail).not.toHaveBeenCalled();
+    // No recalculateOrderStatus / finalize-loop queries at all — a
+    // cancelled order's delivery never enters deliveredThisRunByOrder.
+    expect(db.query).toHaveBeenCalledTimes(1);
+
+    const insertCall = execute.mock.calls.find(([sql]) => sql.includes('INSERT INTO digital_codes'));
+    expect(insertCall[0]).toContain("'available'");
+    expect(insertCall[0]).toContain('NULL'); // order_id — unassigned, sellable to the next customer
+    expect(insertCall[1]).toEqual([5, 'enc(ABCD-1234)', null, null]); // sku_id + encrypted code, no pin/serial in this fixture
+    const updateCall = execute.mock.calls.find(([sql]) => sql.includes('UPDATE order_details'));
+    expect(updateCall[0]).toContain('recovered_as_spare_inventory');
   });
 
   test('getOrderDetails reports a failed/cancelled status -> marks failed, does not deliver or email', async () => {

@@ -594,10 +594,32 @@ class OrderService {
         [orderId]
       );
 
-      // Mark undelivered lines as failed
+      // Undelivered lines split in two — neither WgCards nor Gift2Games
+      // exposes a cancel/refund API (confirmed), so a line whose supplier
+      // order is already placed can't be un-ordered or clawed back the
+      // normal way:
+      //  - nothing was ever placed with a supplier (still local-only, or
+      //    no active link) -> nothing to wait for, fail immediately.
+      //  - a supplier order IS already placed -> left as pending/partial
+      //    on purpose, tagged with a reason instead of being marked
+      //    failed. orderPoller.js/gift2gamesOrderPoller.js keep watching
+      //    these exactly like any other in-flight line; if a code does
+      //    arrive, their cancelled-order branch reclaims it as spare
+      //    stock (sellable to the next customer) instead of crediting an
+      //    order that's already been refunded — the only real cost
+      //    recovery available without a supplier-side cancel API. The
+      //    customer is refunded immediately either way (below); this only
+      //    affects whether WE recover the cost, not whether they do.
       await conn.execute(
         `UPDATE order_details SET delivery_status = 'failed'
-          WHERE order_id = ? AND delivery_status IN ('pending', 'partial')`,
+          WHERE order_id = ? AND delivery_status IN ('pending', 'partial')
+            AND wgcards_order_id IS NULL AND gift2games_order_id IS NULL`,
+        [orderId]
+      );
+      await conn.execute(
+        `UPDATE order_details SET pending_reason = 'cancelled_recovering_supplier_cost'
+          WHERE order_id = ? AND delivery_status IN ('pending', 'partial')
+            AND (wgcards_order_id IS NOT NULL OR gift2games_order_id IS NOT NULL)`,
         [orderId]
       );
 
