@@ -58,6 +58,10 @@ async function recoverAsSpareInventory({ skuId, orderDetailId, referenceNumber, 
         delivered.serial ? encrypt(delivered.serial) : null,
       ]
     );
+    // Required, not optional — see orderPoller.js's identical increment
+    // for the full reasoning (chk_quantity CHECK constraint would crash a
+    // future order the moment this recovered code gets sold otherwise).
+    await conn.execute('UPDATE inventory SET stock_quantity = stock_quantity + 1 WHERE sku_id = ?', [skuId]);
     await conn.execute(
       `UPDATE order_details
           SET delivery_status = 'failed', pending_reason = 'recovered_as_spare_inventory',

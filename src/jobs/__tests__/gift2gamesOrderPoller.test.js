@@ -105,6 +105,13 @@ describe('gift2gamesOrderPoller.run', () => {
     expect(insertCall[0]).toContain("'available'");
     expect(insertCall[0]).toContain('NULL'); // order_id — unassigned, sellable to the next customer
     expect(insertCall[1]).toEqual([5, 'enc(ABCD-1234)', null, null]); // sku_id + encrypted code, no pin/serial in this fixture
+    // Required, not cosmetic: _fulfillOrder unconditionally decrements
+    // stock_quantity on delivery — skip this and selling the recovered
+    // code later hits the DB's chk_quantity CHECK constraint and crashes.
+    const invCall = execute.mock.calls.find(([sql]) => sql.includes('UPDATE inventory'));
+    expect(invCall).toBeTruthy();
+    expect(invCall[0]).toContain('stock_quantity = stock_quantity + 1');
+    expect(invCall[1]).toEqual([5]); // sku_id
     const updateCall = execute.mock.calls.find(([sql]) => sql.includes('UPDATE order_details'));
     expect(updateCall[0]).toContain('recovered_as_spare_inventory');
   });

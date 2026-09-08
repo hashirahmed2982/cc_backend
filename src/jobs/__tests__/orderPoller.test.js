@@ -187,6 +187,13 @@ describe('orderPoller.run', () => {
     expect(insertCall[0]).toContain("'available'");
     expect(insertCall[0]).toContain('NULL'); // order_id — unassigned, sellable to the next customer
     expect(insertCall[1]).toEqual([5, expect.any(String), expect.any(String), expect.any(String)]); // sku_id + code/pin/sn, no order_id param
+    // Required, not cosmetic: _fulfillOrder unconditionally decrements
+    // stock_quantity on delivery — skip this and selling the recovered
+    // code later hits the DB's chk_quantity CHECK constraint and crashes.
+    const invCall = execute.mock.calls.find(([sql]) => sql.includes('UPDATE inventory'));
+    expect(invCall).toBeTruthy();
+    expect(invCall[0]).toContain('stock_quantity = stock_quantity + ?');
+    expect(invCall[1]).toEqual([1, 5]); // 1 recovered code, sku_id 5
     const failCall = execute.mock.calls.find(([sql]) => sql.includes('UPDATE order_details'));
     expect(failCall[0]).toContain('recovered_as_spare_inventory');
   });

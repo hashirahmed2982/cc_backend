@@ -152,6 +152,19 @@ async function recoverAsSpareInventory(orderDetailRow, newRecords) {
         ]
       );
     }
+    // Every OTHER path that inserts an 'available' digital_codes row
+    // (product.service.js#uploadCodes) pairs it with this exact increment
+    // — _fulfillOrder's local-delivery path unconditionally decrements
+    // stock_quantity by however many codes it hands out, with no
+    // unlimited_stock check. Skipping this here would silently break that
+    // invariant: a pure-supplier SKU starts at stock_quantity 0, and the
+    // very next time this recovered code gets sold, that decrement would
+    // drive it to -1 and hit the DB's chk_quantity CHECK constraint,
+    // crashing that order's fulfillment.
+    await conn.execute(
+      'UPDATE inventory SET stock_quantity = stock_quantity + ? WHERE sku_id = ?',
+      [newRecords.length, orderDetailRow.sku_id]
+    );
     await conn.execute(
       `UPDATE order_details SET delivery_status = 'failed', pending_reason = 'recovered_as_spare_inventory', last_polled_at = NOW()
         WHERE order_detail_id = ?`,
