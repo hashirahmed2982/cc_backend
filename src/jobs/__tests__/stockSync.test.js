@@ -88,6 +88,18 @@ describe('stockSync.run', () => {
     expect(summary).toMatchObject({
       totalSkus: 3, batches: 2, updated: 3, failedBatches: [], staleCount: 2,
     });
+
+    // Real gap this closes (audit finding #4): this UPDATE used to be a
+    // blind overwrite of stock_quantity — since cancelOrder's recovery
+    // path (recoverAsSpareInventory) can leave a real, sellable
+    // digital_codes row on a WgCards-linked SKU with an incremented
+    // stock_quantity to match, an hourly blind overwrite here would erase
+    // that increment and reintroduce the chk_quantity CHECK-constraint
+    // crash risk that fix was written to close. GREATEST() against a live
+    // COUNT of available digital_codes is what prevents that.
+    const applyCall = db.query.mock.calls.find(([sql]) => sql.includes('UPDATE inventory'));
+    expect(applyCall[0]).toContain('GREATEST(');
+    expect(applyCall[0]).toContain("status = 'available'");
   });
 
   test('a failing batch is skipped, not retried, and does not abort the run', async () => {

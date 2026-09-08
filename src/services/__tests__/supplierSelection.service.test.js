@@ -60,9 +60,10 @@ describe('supplierSelection.selectAndFulfill', () => {
     expect(wgcardsFulfillment.attemptFulfillment).not.toHaveBeenCalled();
   });
 
-  test('happy path: single usable link succeeds, records the attempt, sets fulfillment_supplier', async () => {
+  test('happy path: single usable link succeeds, records the attempt, sets fulfillment_supplier AND unit_cost', async () => {
     db.queryOne
       .mockResolvedValueOnce(null) // fulfillment_supplier check
+      .mockResolvedValueOnce({ selling_price: 20 }) // cost-floor re-check's own lookup
       .mockResolvedValueOnce({ fulfillment_attempts: null }); // _recordAttempt's read
     db.query.mockResolvedValue(undefined);
     supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([wgcardsLink]);
@@ -75,14 +76,14 @@ describe('supplierSelection.selectAndFulfill', () => {
     expect(gift2gamesFulfillment.attemptFulfillment).not.toHaveBeenCalled();
     expect(db.query).toHaveBeenCalledWith(
       expect.stringContaining('UPDATE order_details SET fulfillment_supplier'),
-      ['wgcards', 1, 5]
+      ['wgcards', 10, 1, 5] // real winning cost (10) now recorded as unit_cost, not the selling price
     );
     const attemptWrite = db.query.mock.calls.find(([sql]) => sql.includes('fulfillment_attempts'));
     expect(JSON.parse(attemptWrite[1][0])[0]).toMatchObject({ supplier: 'wgcards', result: 'success' });
   });
 
   test('cheapest-first: gift2games (cheaper) is tried before wgcards, wgcards never called', async () => {
-    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ fulfillment_attempts: null });
+    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ selling_price: 20 }).mockResolvedValueOnce({ fulfillment_attempts: null });
     db.query.mockResolvedValue(undefined);
     supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([wgcardsLink, gift2gamesLink]); // wgcards=10, gift2games=8
     supplierConfigRepo.getBySupplierName.mockResolvedValue(healthyCfg);
@@ -97,6 +98,7 @@ describe('supplierSelection.selectAndFulfill', () => {
   test('failover: cheapest supplier business-rejects, next-cheapest succeeds, both attempts recorded', async () => {
     db.queryOne
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ selling_price: 20 })
       .mockResolvedValueOnce({ fulfillment_attempts: null })
       .mockResolvedValueOnce({ fulfillment_attempts: JSON.stringify([{ supplier: 'gift2games', result: 'failed' }]) });
     db.query.mockResolvedValue(undefined);
@@ -120,6 +122,7 @@ describe('supplierSelection.selectAndFulfill', () => {
   test('every link tried and failed -> pendingItems, fulfillment_supplier never set', async () => {
     db.queryOne
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ selling_price: 20 })
       .mockResolvedValueOnce({ fulfillment_attempts: null })
       .mockResolvedValueOnce({ fulfillment_attempts: '[]' });
     db.query.mockResolvedValue(undefined);
@@ -135,7 +138,7 @@ describe('supplierSelection.selectAndFulfill', () => {
   });
 
   test('always_prefer override skips price comparison entirely, even against a cheaper link', async () => {
-    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ fulfillment_attempts: null });
+    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ selling_price: 20 }).mockResolvedValueOnce({ fulfillment_attempts: null });
     db.query.mockResolvedValue(undefined);
     const preferredWgcards = { ...wgcardsLink, admin_priority_override: 'always_prefer' }; // pricier (10) but preferred
     supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([preferredWgcards, gift2gamesLink]); // gift2games is cheaper (8)
@@ -161,7 +164,7 @@ describe('supplierSelection.selectAndFulfill', () => {
   });
 
   test('a fulfillment module throwing unexpectedly is caught and treated as a failed attempt, not aborted', async () => {
-    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ fulfillment_attempts: null });
+    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ selling_price: 20 }).mockResolvedValueOnce({ fulfillment_attempts: null });
     db.query.mockResolvedValue(undefined);
     supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([wgcardsLink]);
     supplierConfigRepo.getBySupplierName.mockResolvedValueOnce(healthyCfg);
@@ -170,5 +173,73 @@ describe('supplierSelection.selectAndFulfill', () => {
     const result = await selectAndFulfill({ orderId: 1, item: { skuId: 5, quantity: 1 } });
 
     expect(result).toMatchObject({ success: false, reason: 'unexpected_error' });
+  });
+
+  // Real gap this closes (finding #3 of the audit): every OTHER price
+  // guard in this codebase only checks at gate time (linking, price-edit)
+  // — nothing re-checked cost vs selling price at the one moment that
+  // actually spends money: dispatching a real order to a supplier. A
+  // routine catalog/stock sync can raise sku_supplier_links.cost_price at
+  // any time after a product was priced.
+  describe('cost-floor re-check at dispatch time', () => {
+    test('a link whose cost now EXCEEDS the current selling price is skipped, next-cheapest link is tried instead', async () => {
+      db.queryOne
+        .mockResolvedValueOnce(null) // fulfillment_supplier check
+        .mockResolvedValueOnce({ selling_price: 9 }) // gift2games' cost (8) clears it; wgcards' cost (10) does not
+        .mockResolvedValueOnce({ fulfillment_attempts: null }); // _recordAttempt for the successful gift2games attempt
+      db.query.mockResolvedValue(undefined);
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([gift2gamesLink, wgcardsLink]); // gift2games (8) tried first anyway — cheapest-first
+      supplierConfigRepo.getBySupplierName.mockResolvedValue(healthyCfg);
+      gift2gamesFulfillment.attemptFulfillment.mockResolvedValueOnce({ success: true, gift2gamesOrderId: 'G2G-9' });
+
+      const result = await selectAndFulfill({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+      expect(result).toMatchObject({ success: true, supplier: 'gift2games' });
+      // wgcards' cost (10) exceeds the 9 selling price — must never even
+      // be dispatched to, whether it's tried or not.
+      expect(wgcardsFulfillment.attemptFulfillment).not.toHaveBeenCalled();
+    });
+
+    test('EVERY link exceeds the current selling price -> fails closed, no supplier ever actually dispatched to', async () => {
+      db.queryOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ selling_price: 5 }); // below both wgcards (10) and gift2games (8)
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([wgcardsLink, gift2gamesLink]);
+      supplierConfigRepo.getBySupplierName.mockResolvedValue(healthyCfg);
+
+      const result = await selectAndFulfill({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+      expect(result).toMatchObject({ success: false, reason: 'cost_exceeds_selling_price' });
+      expect(wgcardsFulfillment.attemptFulfillment).not.toHaveBeenCalled();
+      expect(gift2gamesFulfillment.attemptFulfillment).not.toHaveBeenCalled();
+      expect(db.query).not.toHaveBeenCalledWith(expect.stringContaining('fulfillment_supplier ='), expect.anything());
+    });
+
+    test('a link with a non-USD cost is refused outright, never dispatched to, even if the raw number looks low', async () => {
+      db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ selling_price: 5 });
+      const cnyLink = { ...wgcardsLink, cost_price: 41.39, cost_price_base_currency: null, cost_currency: 'CNY' };
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([cnyLink]);
+      supplierConfigRepo.getBySupplierName.mockResolvedValueOnce(healthyCfg);
+
+      const result = await selectAndFulfill({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+      expect(result).toMatchObject({ success: false, reason: 'cost_exceeds_selling_price' });
+      expect(wgcardsFulfillment.attemptFulfillment).not.toHaveBeenCalled();
+    });
+
+    test('no product_skus row found for the sku -> skips the re-check rather than blocking on a null selling price', async () => {
+      db.queryOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null) // no SKU row found
+        .mockResolvedValueOnce({ fulfillment_attempts: null });
+      db.query.mockResolvedValue(undefined);
+      supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([wgcardsLink]);
+      supplierConfigRepo.getBySupplierName.mockResolvedValueOnce(healthyCfg);
+      wgcardsFulfillment.attemptFulfillment.mockResolvedValueOnce({ success: true, wgcardsOrderId: 'ORD-5' });
+
+      const result = await selectAndFulfill({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+      expect(result).toMatchObject({ success: true, supplier: 'wgcards' });
+    });
   });
 });

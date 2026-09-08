@@ -14,6 +14,7 @@ const supplierConfigRepo = require('../repositories/supplierConfig.repository');
 const supplierLinksRepo = require('../repositories/supplierLinks.repository');
 const wgcardsFulfillment = require('./wgcardsFulfillment');
 const gift2gamesFulfillment = require('./gift2gamesFulfillment');
+const { assertSellingPriceAboveCost } = require('../utils/priceGuard');
 
 // Registry Section 5's own header calls for: "_fulfillOrder() calls
 // supplierRegistry[product.source] instead of branching on supplier name
@@ -39,7 +40,22 @@ async function _isSupplierUsable(supplier) {
  * always_prefer link(s) or sort everything remaining cheapest-first. */
 function _pickOrderedLinks(links, usableMap) {
   const usable = links.filter((l) => usableMap[l.supplier] && l.admin_priority_override !== 'never_use');
-  const byCost = (a, b) => (parseFloat(a.cost_price_base_currency ?? a.cost_price) - parseFloat(b.cost_price_base_currency ?? b.cost_price));
+  // cost_price_base_currency is null exactly when that link's cost could
+  // NOT be confirmed USD (see resolveCostPriceBaseCurrency in both catalog
+  // sync jobs) — comparing its raw, non-USD cost_price against another
+  // link's real USD cost would be comparing incompatible units, the same
+  // mistake priceGuard.js exists to prevent everywhere else in this
+  // codebase. Such a link sorts LAST — never assumed cheap, never assumed
+  // expensive — rather than silently racing on a bogus cross-currency
+  // number. selectAndFulfill's own cost-floor re-check (§10 step 5) is
+  // what actually refuses to dispatch to it when its turn comes.
+  const byCost = (a, b) => {
+    const aKnown = a.cost_price_base_currency != null;
+    const bKnown = b.cost_price_base_currency != null;
+    if (aKnown !== bKnown) return aKnown ? -1 : 1;
+    if (!aKnown) return 0; // both unknown — no safe basis to order them either
+    return parseFloat(a.cost_price_base_currency) - parseFloat(b.cost_price_base_currency);
+  };
 
   const alwaysPrefer = usable.filter((l) => l.admin_priority_override === 'always_prefer');
   if (alwaysPrefer.length) {
@@ -110,6 +126,18 @@ async function selectAndFulfill({ orderId, item, currency = 'USD' }) {
     return { success: false, reason: 'no_usable_supplier_link' };
   }
 
+  // Every price guard elsewhere in this codebase (confirmLink,
+  // createNewFromStaging, product.service.js#update) only checks at GATE
+  // time — when a link is confirmed, or when an admin edits a price. None
+  // of them run again right here, at the one moment that actually spends
+  // money: dispatching a real order to a supplier. A routine catalog/stock
+  // sync can silently raise sku_supplier_links.cost_price at any time
+  // between those gates and this call — without this, nothing would catch
+  // a supplier whose cost has since risen above the product's current
+  // selling price before an order goes out at a loss.
+  const skuRow = await db.queryOne('SELECT selling_price FROM product_skus WHERE sku_id = ?', [item.skuId]);
+  const sellingPrice = skuRow ? parseFloat(skuRow.selling_price) : null;
+
   let lastResult = null;
 
   for (const link of ordered) {
@@ -120,6 +148,27 @@ async function selectAndFulfill({ orderId, item, currency = 'USD' }) {
     }
 
     const attemptedAt = new Date().toISOString();
+
+    // The re-check described above — refuses to even dispatch to a link
+    // whose cost no longer clears the current selling price (or whose
+    // cost currency isn't confirmed USD, same as every other price guard
+    // in this codebase refuses to guess at conversion). Treated exactly
+    // like any other per-supplier failure: recorded, and the loop falls
+    // through to the next-cheapest remaining link.
+    if (sellingPrice != null) {
+      try {
+        assertSellingPriceAboveCost(sellingPrice, parseFloat(link.cost_price), link.cost_currency || 'USD');
+      } catch (err) {
+        logger.warn(`supplierSelection: refusing to dispatch to ${link.supplier} link ${link.link_id} for sku ${item.skuId} — ${err.message}`);
+        lastResult = { success: false, reason: 'cost_exceeds_selling_price', error: err.message };
+        await _recordAttempt(orderId, item.skuId, {
+          supplier: link.supplier, reference: null, attemptedAt,
+          result: 'failed', reason: 'cost_exceeds_selling_price',
+        });
+        continue;
+      }
+    }
+
     let result;
     try {
       result = await fulfillmentModule.attemptFulfillment({ orderId, item, currency, link });
@@ -141,9 +190,14 @@ async function selectAndFulfill({ orderId, item, currency = 'USD' }) {
     });
 
     if (result.success) {
+      // unit_cost: replaces the placement-time cost estimate with the
+      // REAL cost of whichever link actually fulfilled this line — safe
+      // to trust now that the re-check above has confirmed it's USD and
+      // clears the selling price. See order.service.js#placeOrder's own
+      // comment on the placement-time estimate this supersedes.
       await db.query(
-        'UPDATE order_details SET fulfillment_supplier = ? WHERE order_id = ? AND sku_id = ?',
-        [link.supplier, orderId, item.skuId]
+        'UPDATE order_details SET fulfillment_supplier = ?, unit_cost = ? WHERE order_id = ? AND sku_id = ?',
+        [link.supplier, parseFloat(link.cost_price), orderId, item.skuId]
       );
       return { ...result, supplier: link.supplier };
     }

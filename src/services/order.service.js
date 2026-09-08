@@ -121,8 +121,8 @@ class OrderService {
 
         // Get primary active SKU (or specific one if provided)
         const skuQuery = item.skuId
-          ? 'SELECT sku_id, selling_price FROM product_skus WHERE sku_id = ? AND product_id = ? AND is_active = 1 LIMIT 1'
-          : 'SELECT sku_id, selling_price FROM product_skus WHERE product_id = ? AND is_active = 1 ORDER BY sku_id LIMIT 1';
+          ? 'SELECT sku_id, selling_price, cost_price FROM product_skus WHERE sku_id = ? AND product_id = ? AND is_active = 1 LIMIT 1'
+          : 'SELECT sku_id, selling_price, cost_price FROM product_skus WHERE product_id = ? AND is_active = 1 ORDER BY sku_id LIMIT 1';
         const skuParams = item.skuId ? [item.skuId, productId] : [productId];
         const [skuRows] = await conn.execute(skuQuery, skuParams);
         if (!skuRows.length) throw new Error(`No active SKU found for product "${prodRows[0].product_name}"`);
@@ -147,6 +147,16 @@ class OrderService {
           skuId: sku.sku_id,
           quantity: qty,
           unitPrice,
+          // Best-known cost basis at placement time — this SKU's own
+          // recorded cost_price (internal manual cost, or the originating
+          // supplier's synced cost). If a supplier ends up fulfilling this
+          // line, supplierSelection.service.js#selectAndFulfill overwrites
+          // this with that specific link's real cost once known — this is
+          // just the honest starting estimate, never left as a copy of the
+          // selling price (which made every margin report read $0
+          // regardless of real profitability — see product_skus.cost_price
+          // vs the old `unit_cost: unitPrice` bug this replaces).
+          unitCost: parseFloat(sku.cost_price) || 0,
           lineTotal,
         });
       }
@@ -175,7 +185,7 @@ class OrderService {
           `INSERT INTO order_details
              (order_id, product_id, sku_id, quantity, unit_cost, unit_price, currency)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [orderId, item.productId, item.skuId, item.quantity, item.unitPrice, item.unitPrice, wallet.currency]
+          [orderId, item.productId, item.skuId, item.quantity, item.unitCost, item.unitPrice, wallet.currency]
         );
       }
 
@@ -282,36 +292,47 @@ class OrderService {
       // this is a cheap no-op for it, but an internal product that also has
       // a supplier linked (Master Plan §9/§10's confirmLink) sells its own
       // stock first and only reaches for the supplier for whatever's short.
-      const codes = await db.query(
-        `SELECT code_id, code FROM digital_codes
-        WHERE sku_id = ? AND status = 'available' LIMIT ?`,
-        [item.skuId, item.quantity]
-      );
-      const allocated = codes.slice(0, item.quantity);
-      let delivered = 0;
-      let deliveredCodes = [];
-
-      if (allocated.length > 0) {
-        const codeIds = allocated.map(c => c.code_id);
-        await db.query(
-          `UPDATE digital_codes SET status = 'sold', order_id = ?, sold_at = NOW()
-          WHERE code_id IN (${codeIds.map(() => '?').join(',')})`,
-          [orderId, ...codeIds]
+      // SELECT + UPDATE wrapped in one transaction with FOR UPDATE — the
+      // previous version ran these as two separate plain db.query() calls
+      // with no lock at all, so two orders landing close together on the
+      // same thin-stock SKU could both SELECT the same "available" rows
+      // and both successfully mark them sold, the second UPDATE silently
+      // overwriting the first's order_id (the code itself was already
+      // handed to the first customer). FOR UPDATE makes a second
+      // concurrent transaction block on this SELECT until the first
+      // commits, at which point those same rows no longer match
+      // status='available' and it correctly gets nothing instead. The
+      // extra `AND status = 'available'` on the UPDATE is defense in
+      // depth, not load-bearing on its own.
+      const allocated = await db.transaction(async (conn) => {
+        const [rows] = await conn.execute(
+          `SELECT code_id, code FROM digital_codes
+          WHERE sku_id = ? AND status = 'available' LIMIT ? FOR UPDATE`,
+          [item.skuId, item.quantity]
         );
-        await db.query(
-          'UPDATE inventory SET stock_quantity = stock_quantity - ? WHERE sku_id = ?',
-          [allocated.length, item.skuId]
-        );
-        // Accumulate delivered_qty — delivery_status updated separately after all runs
-        await db.query(
-          `UPDATE order_details
-            SET delivered_qty = delivered_qty + ?
-          WHERE order_id = ? AND sku_id = ?`,
-          [allocated.length, orderId, item.skuId]
-        );
-        delivered = allocated.length;
-        deliveredCodes = allocated.map(c => decrypt(c.code));
-      }
+        if (rows.length > 0) {
+          const codeIds = rows.map(c => c.code_id);
+          await conn.execute(
+            `UPDATE digital_codes SET status = 'sold', order_id = ?, sold_at = NOW()
+            WHERE code_id IN (${codeIds.map(() => '?').join(',')}) AND status = 'available'`,
+            [orderId, ...codeIds]
+          );
+          await conn.execute(
+            'UPDATE inventory SET stock_quantity = stock_quantity - ? WHERE sku_id = ?',
+            [rows.length, item.skuId]
+          );
+          // Accumulate delivered_qty — delivery_status updated separately after all runs
+          await conn.execute(
+            `UPDATE order_details
+              SET delivered_qty = delivered_qty + ?
+            WHERE order_id = ? AND sku_id = ?`,
+            [rows.length, orderId, item.skuId]
+          );
+        }
+        return rows;
+      });
+      let delivered = allocated.length;
+      let deliveredCodes = allocated.map(c => decrypt(c.code));
 
       let remaining = item.quantity - delivered;
       let pendingReason = null;

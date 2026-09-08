@@ -63,10 +63,25 @@ async function getActiveWgCardsSkuIds() {
 }
 
 async function applyStockUpdate(update) {
+  // GREATEST(...) — not a plain overwrite. order.service.js#cancelOrder's
+  // recovery path (recoverAsSpareInventory, both suppliers) can leave a
+  // real, sellable digital_codes row on a WgCards-linked SKU, paired with
+  // an increment to this exact stock_quantity column so _fulfillOrder's
+  // later unconditional decrement never drives it negative. A blind
+  // overwrite here — this job runs hourly — would silently erase that
+  // increment back down to whatever WgCards reports remotely (which has
+  // nothing to do with a locally-recovered code), reintroducing the same
+  // chk_quantity CHECK-constraint crash risk that fix was written to
+  // close. Never let the remote number shrink below what we can actually
+  // still deliver locally right now.
   await db.query(
     `UPDATE inventory inv
        JOIN product_skus ps ON ps.sku_id = inv.sku_id
-        SET inv.stock_quantity = ?, inv.unlimited_stock = ?, inv.last_sync = NOW()
+        SET inv.stock_quantity = GREATEST(
+              ?,
+              (SELECT COUNT(*) FROM digital_codes dc WHERE dc.sku_id = inv.sku_id AND dc.status = 'available')
+            ),
+            inv.unlimited_stock = ?, inv.last_sync = NOW()
       WHERE ps.wgcards_sku_id = ?`,
     [update.stockQuantity, update.unlimitedStock ? 1 : 0, update.wgcardsSkuId]
   );
