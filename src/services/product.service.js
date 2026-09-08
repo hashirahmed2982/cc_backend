@@ -612,6 +612,31 @@ class ProductService {
       throw err;
     }
   }
+  /** The "selectedIds is a plain array of specific product ids" path —
+   * counterpart to bulkSetStatusByFilter's "select all matching the
+   * current filters" path. product.controller.js#bulkSetStatus calls
+   * this one whenever selectAllMatching isn't set (the normal "check a
+   * few boxes on this page and activate/deactivate them" flow). */
+  async bulkSetStatus(productIds, isActive, updatedBy) {
+    try {
+      const ids = (productIds || []).map((id) => parseInt(id)).filter((id) => Number.isFinite(id));
+      if (ids.length === 0) return { updated: 0, status: isActive ? 'active' : 'inactive' };
+
+      const result = await db.query(
+        `UPDATE products SET is_active = ?, updated_by = ? WHERE product_id IN (${ids.map(() => '?').join(',')})`,
+        [isActive ? 1 : 0, updatedBy, ...ids]
+      );
+
+      // affectedRows (not ids.length) — a stale selection can include an
+      // id that's since been deleted; the count should reflect what was
+      // actually changed, same as bulkSetStatusByFilter's pre-counted total.
+      return { updated: result.affectedRows || 0, status: isActive ? 'active' : 'inactive' };
+    } catch (err) {
+      logger.error('ProductService.bulkSetStatus:', err);
+      throw err;
+    }
+  }
+
   async bulkSetStatusByFilter(filters, excludeIds, isActive, updatedBy) {
     try {
       const conds = [], params = [];

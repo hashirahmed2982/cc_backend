@@ -99,6 +99,50 @@ describe('product.service price guard (admin cannot undercut supplier/internal c
     });
   });
 
+  // Real production error: "productService.bulkSetStatus is not a function"
+  // when selecting all products on a page and activating/deactivating —
+  // product.controller.js#bulkSetStatus calls this for the plain
+  // productIds path (as opposed to bulkSetStatusByFilter's
+  // selectAllMatching path), and it simply didn't exist.
+  describe('bulkSetStatus', () => {
+    // mockReset (not just clearAllMocks — earlier describe blocks in this
+    // file leave unconsumed queued mockResolvedValueOnce values on
+    // db.query/db.queryOne, which clearAllMocks alone doesn't drop) so
+    // this block starts from a genuinely clean slate every test.
+    beforeEach(() => { db.query.mockReset(); db.queryOne.mockReset(); });
+
+    test('updates exactly the given product ids, returns the real affected-row count', async () => {
+      db.query.mockResolvedValueOnce({ affectedRows: 3 });
+
+      const result = await productService.bulkSetStatus(['1', '2', '3'], true, 7);
+
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE product_id IN (?,?,?)'),
+        [1, 7, 1, 2, 3]
+      );
+      expect(result).toEqual({ updated: 3, status: 'active' });
+    });
+
+    test('deactivating sets is_active = 0', async () => {
+      db.query.mockResolvedValueOnce({ affectedRows: 1 });
+      const result = await productService.bulkSetStatus([5], false, 7);
+      expect(db.query).toHaveBeenCalledWith(expect.any(String), [0, 7, 5]);
+      expect(result.status).toBe('inactive');
+    });
+
+    test('empty/invalid id list -> no query at all, zero updated', async () => {
+      const result = await productService.bulkSetStatus([], true, 7);
+      expect(db.query).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: 0, status: 'active' });
+    });
+
+    test('a stale id that no longer matches any row is reflected in the real affectedRows, not the input length', async () => {
+      db.query.mockResolvedValueOnce({ affectedRows: 1 }); // only 1 of 2 ids still existed
+      const result = await productService.bulkSetStatus([1, 999], true, 7);
+      expect(result.updated).toBe(1);
+    });
+  });
+
   // Real request: "when products are linked... in type column I want to
   // see all types the product has... since they are linked" — a product
   // can pick up sku_supplier_links from Link Products confirmLink without
