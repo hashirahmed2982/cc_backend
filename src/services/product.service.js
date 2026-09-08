@@ -41,7 +41,12 @@ const PRODUCT_SELECT = `
     COALESCE(MAX(inv.unlimited_stock), 0)            AS unlimited_stock,
     COALESCE(SUM(inv.available_qty),   0) AS available_codes,
     COALESCE(dc_counts.total_codes,    0) AS total_codes,
-    COALESCE(dc_counts.sold_codes,     0) AS sold_codes
+    COALESCE(dc_counts.sold_codes,     0) AS sold_codes,
+    -- MAX() here is just "pick the one value" — supplier_links is already
+    -- pre-aggregated to one row per product_id below, so every ps row this
+    -- fans out against for the same product carries the identical string;
+    -- MAX picks it same as MAX(ps.is_custom_value) does above.
+    MAX(supplier_links.linked_suppliers) AS linked_suppliers
   FROM products p
   LEFT JOIN product_skus ps  ON ps.product_id = p.product_id AND ps.is_active = 1
   LEFT JOIN inventory    inv ON inv.sku_id     = ps.sku_id
@@ -55,6 +60,22 @@ const PRODUCT_SELECT = `
     WHERE ps2.is_active = 1
     GROUP BY ps2.product_id
   ) dc_counts ON dc_counts.product_id = p.product_id
+  -- Distinct active suppliers linked to ANY of this product's SKUs (Master
+  -- Plan §9/§10's sku_supplier_links via confirmLink) — surfaced so the
+  -- Products page "Type" column can show every source a product actually
+  -- has, not just products.source, since a link can attach a supplier to
+  -- an internal product (or a second supplier to an already-supplier
+  -- product) without ever touching that column. See order.service.js's
+  -- own file-level note on the same source/links tension.
+  LEFT JOIN (
+    SELECT
+      ps3.product_id,
+      GROUP_CONCAT(DISTINCT l.supplier ORDER BY l.supplier SEPARATOR ',') AS linked_suppliers
+    FROM product_skus ps3
+    JOIN sku_supplier_links l ON l.sku_id = ps3.sku_id AND l.is_active = 1
+    WHERE ps3.is_active = 1
+    GROUP BY ps3.product_id
+  ) supplier_links ON supplier_links.product_id = p.product_id
 `;
 
 class ProductService {
@@ -645,6 +666,15 @@ class ProductService {
 
     const status = row.is_active ? 'active' : 'inactive';
 
+    // Every distinct source this product actually has, not just
+    // products.source: its own source (internal or the supplier it was
+    // created from) plus every supplier with an active sku_supplier_links
+    // row on any of its SKUs. A product can accumulate more than one of
+    // these purely through Link Products confirmLink — see the JOIN
+    // comment on linked_suppliers above.
+    const linkedSuppliers = row.linked_suppliers ? row.linked_suppliers.split(',').filter(Boolean) : [];
+    const linkedSources = Array.from(new Set([row.source || 'internal', ...linkedSuppliers]));
+
     return {
       id: String(row.product_id),
       name: row.product_name,
@@ -668,6 +698,7 @@ class ProductService {
       status,
       source: row.source || 'internal',
       isSupplierProduct: isSupplier,
+      linkedSources,
       // spuType 5 = WgCards "Direct Top-Up" — can't go through the regular
       // order flow at all (see wgcardsFulfillment.js's requires_direct_
       // topup_flow bail-out); the admin panel needs this to warn/badge it

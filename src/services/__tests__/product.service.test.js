@@ -98,4 +98,37 @@ describe('product.service price guard (admin cannot undercut supplier/internal c
       ).rejects.toThrow(/not USD/);
     });
   });
+
+  // Real request: "when products are linked... in type column I want to
+  // see all types the product has... since they are linked" — a product
+  // can pick up sku_supplier_links from Link Products confirmLink without
+  // products.source ever changing, so the Type column needs every source,
+  // not just the one column.
+  describe('_format: linkedSources', () => {
+    test('internal product with no supplier links -> just [internal]', () => {
+      const result = productService._format({ product_id: 1, product_name: 'X', source: null, linked_suppliers: null });
+      expect(result.linkedSources).toEqual(['internal']);
+    });
+
+    test('internal product that later got a wgcards + gift2games link via confirmLink -> all three, no duplicates', () => {
+      const result = productService._format({
+        product_id: 1, product_name: 'X', source: 'internal', linked_suppliers: 'gift2games,wgcards',
+      });
+      expect(result.linkedSources).toEqual(['internal', 'gift2games', 'wgcards']);
+    });
+
+    test('pure supplier product whose own source already matches its only link -> no duplicate entry', () => {
+      const result = productService._format({
+        product_id: 1, product_name: 'X', source: 'wgcards', linked_suppliers: 'wgcards',
+      });
+      expect(result.linkedSources).toEqual(['wgcards']);
+    });
+
+    test('wgcards-sourced product that also picked up a gift2games link -> both, own source first', () => {
+      const result = productService._format({
+        product_id: 1, product_name: 'X', source: 'wgcards', linked_suppliers: 'gift2games,wgcards',
+      });
+      expect(result.linkedSources).toEqual(['wgcards', 'gift2games']);
+    });
+  });
 });
