@@ -306,7 +306,15 @@ class OrderService {
       // extra `AND status = 'available'` on the UPDATE is defense in
       // depth, not load-bearing on its own.
       const allocated = await db.transaction(async (conn) => {
-        const [rows] = await conn.execute(
+        // conn.query(), not conn.execute() — mysql2's prepared-statement
+        // (binary) protocol, which execute() uses, rejects a parameterized
+        // LIMIT with "Incorrect arguments to mysqld_stmt_execute" (a real,
+        // documented mysql2/mysqld interaction, confirmed live). The
+        // original pre-transaction version of this query used db.query()
+        // (text protocol) and never hit this — query() on the same
+        // transaction connection keeps the FOR UPDATE row lock (locking is
+        // transaction-scoped, not protocol-scoped) while avoiding it.
+        const [rows] = await conn.query(
           `SELECT code_id, code FROM digital_codes
           WHERE sku_id = ? AND status = 'available' LIMIT ? FOR UPDATE`,
           [item.skuId, item.quantity]

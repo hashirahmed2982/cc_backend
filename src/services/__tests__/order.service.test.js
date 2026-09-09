@@ -21,7 +21,13 @@ const baseItem = { skuId: 5, productId: 9, productName: 'X', quantity: 1, unitPr
 function fakeConn(results) {
   const execute = jest.fn();
   results.forEach((r) => execute.mockResolvedValueOnce(r));
-  return { execute, beginTransaction: jest.fn(), commit: jest.fn(), rollback: jest.fn(), release: jest.fn() };
+  // query aliases the SAME mock as execute — _fulfillOrder's local-code
+  // SELECT uses conn.query() specifically (not execute()); see that call
+  // site's own comment for why (LIMIT ? breaks under mysql2's prepared-
+  // statement protocol). Aliasing keeps every existing queued-results
+  // sequence in this file working regardless of which method a given
+  // call happens to use.
+  return { execute, query: execute, beginTransaction: jest.fn(), commit: jest.fn(), rollback: jest.fn(), release: jest.fn() };
 }
 
 // Real gap this closes (audit finding #2): unit_cost used to be set equal
@@ -194,10 +200,29 @@ describe('_fulfillOrder: local stock priority + supplier fallback', () => {
 
     await orderService._fulfillOrder(1, [{ ...baseItem, source: 'internal' }], 1);
 
-    const selectCall = conn.execute.mock.calls[0];
+    const selectCall = conn.execute.mock.calls[0]; // query aliases execute in this fakeConn
     expect(selectCall[0]).toContain('FOR UPDATE');
     const updateCall = conn.execute.mock.calls.find(([sql]) => sql.includes("SET status = 'sold'"));
     expect(updateCall[0]).toContain("AND status = 'available'");
+  });
+
+  // Real production error this locks in against regressing: mysql2's
+  // prepared-statement (binary) protocol — what conn.execute() uses —
+  // rejects a parameterized LIMIT with "Incorrect arguments to
+  // mysqld_stmt_execute". conn.query() (text protocol) doesn't have this
+  // problem and still honors FOR UPDATE on the same transaction
+  // connection. Uses separate mocks (not fakeConn's aliased one) so this
+  // can tell the two methods apart.
+  test('the FOR UPDATE SELECT specifically goes through conn.query(), never conn.execute() — LIMIT ? breaks under execute()', async () => {
+    const query = jest.fn().mockResolvedValueOnce([[{ code_id: 1, code: 'enc(CODE1)' }]]);
+    const execute = jest.fn().mockResolvedValue(undefined);
+    db.transaction.mockImplementationOnce(async (cb) => cb({ query, execute }));
+
+    await orderService._fulfillOrder(1, [{ ...baseItem, source: 'internal' }], 1);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('LIMIT ? FOR UPDATE');
+    expect(execute.mock.calls.some(([sql]) => sql.includes('LIMIT'))).toBe(false);
   });
 });
 
