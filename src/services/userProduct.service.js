@@ -249,11 +249,23 @@ async getClientProducts(userId, { search, category, page = 1, limit = 50 } = {})
           COALESCE(MIN(cp.custom_price), MIN(ps.selling_price)) AS price,
           CASE WHEN MIN(cp.custom_price) IS NOT NULL THEN 1 ELSE 0 END AS hasCustomPrice,
           COALESCE(MAX(inv.available_qty), 0)                  AS availableCodes,
-          MAX(inv.unlimited_stock)                             AS unlimitedStock
+          MAX(inv.unlimited_stock)                             AS unlimitedStock,
+          MAX(supplier_links.has_link)                         AS hasSupplierLink
         FROM products p
         LEFT JOIN product_skus ps ON ps.product_id = p.product_id AND ps.is_active = 1
         LEFT JOIN client_pricing cp ON cp.sku_id = ps.sku_id AND cp.user_id = ?
         LEFT JOIN inventory inv ON inv.sku_id = ps.sku_id
+        -- An internal product that has since picked up an active supplier
+        -- link (Master Plan §9's confirmLink) is fulfilled from that
+        -- supplier's real-time stock going forward, same as a pure
+        -- supplier-sourced product — confirmLink never touches
+        -- products.source, so that column alone can't tell us this.
+        LEFT JOIN (
+          SELECT sku_id, 1 AS has_link
+          FROM sku_supplier_links
+          WHERE is_active = 1
+          GROUP BY sku_id
+        ) supplier_links ON supplier_links.sku_id = ps.sku_id
         ${where}
         GROUP BY p.product_id
         ORDER BY p.product_name ASC
@@ -320,8 +332,16 @@ async getClientProducts(userId, { search, category, page = 1, limit = 50 } = {})
       regularPrice:           parseFloat(row.regularPrice) || 0,
       hasCustomPrice:         row.hasCustomPrice === 1,
       source:                 row.source || 'internal',
-      availableCodes:         row.source === 'internal' ? parseInt(row.availableCodes) || 0 : null,
-      unlimitedStock:         Boolean(row.unlimitedStock),
+      // A product is only shown with a finite/low-stock count when it's
+      // BOTH internal-sourced AND has no active supplier link — otherwise
+      // (pure supplier product, or an internal product a supplier has
+      // since been linked to via confirmLink) fulfillment draws on the
+      // supplier's real-time stock, so there's no meaningful local count
+      // to warn the customer with. See the supplier_links JOIN above.
+      availableCodes:         (row.source === 'internal' && !row.hasSupplierLink)
+                                 ? parseInt(row.availableCodes) || 0
+                                 : null,
+      unlimitedStock:         row.hasSupplierLink ? true : Boolean(row.unlimitedStock),
     };
   }
 }
