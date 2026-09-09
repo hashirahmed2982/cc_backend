@@ -137,6 +137,30 @@ describe('supplierSelection.selectAndFulfill', () => {
     expect(db.query).not.toHaveBeenCalledWith(expect.stringContaining('fulfillment_supplier ='), expect.anything());
   });
 
+  // Real report: WgCards rejected a live placeOrder with a business-level
+  // "This method not support skuId : X" (code 422) — correctly classified
+  // as supplier_business_rejection (never retried, doesn't trip the
+  // circuit breaker), but the descriptive message itself was silently
+  // dropped — only the generic 'supplier_rejected' code ever reached
+  // fulfillment_attempts, with nowhere for the admin to see WHY.
+  test('a business rejection\'s descriptive message is persisted into fulfillment_attempts, not just the short reason code', async () => {
+    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ selling_price: 20 }).mockResolvedValueOnce({ fulfillment_attempts: null });
+    db.query.mockResolvedValue(undefined);
+    supplierLinksRepo.getActiveLinksForSku.mockResolvedValueOnce([wgcardsLink]);
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce(healthyCfg);
+    wgcardsFulfillment.attemptFulfillment.mockResolvedValueOnce({
+      success: false, reason: 'supplier_rejected', error: 'This method not support skuId : 2025122962722497',
+    });
+
+    await selectAndFulfill({ orderId: 1, item: { skuId: 5, quantity: 1 } });
+
+    const attemptWrite = db.query.mock.calls.find(([sql]) => sql.includes('fulfillment_attempts'));
+    expect(JSON.parse(attemptWrite[1][0])[0]).toMatchObject({
+      reason: 'supplier_rejected',
+      errorDetail: 'This method not support skuId : 2025122962722497',
+    });
+  });
+
   test('always_prefer override skips price comparison entirely, even against a cheaper link', async () => {
     db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ selling_price: 20 }).mockResolvedValueOnce({ fulfillment_attempts: null });
     db.query.mockResolvedValue(undefined);

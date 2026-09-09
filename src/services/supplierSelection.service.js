@@ -163,7 +163,7 @@ async function selectAndFulfill({ orderId, item, currency = 'USD' }) {
         lastResult = { success: false, reason: 'cost_exceeds_selling_price', error: err.message };
         await _recordAttempt(orderId, item.skuId, {
           supplier: link.supplier, reference: null, attemptedAt,
-          result: 'failed', reason: 'cost_exceeds_selling_price',
+          result: 'failed', reason: 'cost_exceeds_selling_price', errorDetail: err.message,
         });
         continue;
       }
@@ -187,6 +187,14 @@ async function selectAndFulfill({ orderId, item, currency = 'USD' }) {
       attemptedAt,
       result: result.success ? 'success' : 'failed',
       reason: result.reason || null,
+      // The short `reason` code (e.g. 'supplier_rejected') was the only
+      // thing ever persisted — the supplier's own descriptive message
+      // (e.g. WgCards' "This method not support skuId : X", confirmed
+      // live) was silently dropped, visible nowhere but a transient log
+      // line. Neither order_details nor fulfillment_attempts has room for
+      // a per-attempt raw-response blob the way Gift2Games' single-slot
+      // gift2games_raw_response does, so it's carried here instead.
+      errorDetail: result.error || null,
     });
 
     if (result.success) {
