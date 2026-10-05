@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
- * Phase 0+1 live smoke test — exercises the REAL services/wgcards.service.js
- * (not a reimplementation) against whatever the DB's supplier_config row
- * points at. Run this after:
+ * Live smoke test — exercises the REAL services/wgcards.service.js (not a
+ * reimplementation) against whatever the DB's supplier_config row points
+ * at. v4 migration note: unlike v3, there is no public sandbox fallback —
+ * WGCARDS_APP_ID/WGCARDS_SECRET/WGCARDS_BODY_KEY_MATERIAL must be set to a
+ * real v4 test credential set before running `npm run seed:wgcards`, and
+ * the sample SKU IDs below are v3-sandbox placeholders — replace them with
+ * real SKU IDs from a v4 getAllItem()/getItem() call once you have
+ * credentials, or this step will just report a clean "not found"-style
+ * rejection rather than a true pass. Run this after:
  *   1. npm run migrate            (or apply 007_wgcards_integration.sql to an
  *                                   existing DB)
- *   2. npm run seed:wgcards       (seeds sandbox creds unless WGCARDS_* env
- *                                   vars are set)
+ *   2. npm run seed:wgcards       (requires real v4 WGCARDS_* env vars)
  *
  * Usage: node scripts/smoke-test-wgcards-service.js
  */
