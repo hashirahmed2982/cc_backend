@@ -1,4 +1,12 @@
 // jobs/wgcardsTopupReconciler.js
+//
+// OUT OF SCOPE (2026-10-06): business decision — Direct Top-Up products/
+// orders are not being catered to. Left wired up (and still registered
+// in jobs/index.js's cron schedule) rather than removed — see
+// routes/topup.routes.js's header for why this is safe to leave dormant.
+// This job's own query only ever finds rows in wgcards_topup_orders,
+// which nothing can create today, so each run is just a cheap no-op.
+//
 // Flow F fallback (Master Plan §5, Cron #5 — "Top-up Reconciler", every 10
 // min, only acting on rows past the 35-min mark). WgCards' own webhook
 // mechanism (Annex III) is the primary path and is fairly reliable on paper

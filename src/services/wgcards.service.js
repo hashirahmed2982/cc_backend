@@ -27,16 +27,20 @@
 // them — do not flip supplier_config.is_active back to 1 off the
 // strength of passing unit tests alone.
 //
-// TWO KNOWN GAPS vs v3, called out at the exact method they affect below:
-//   1. getStock(): v4 has no batch stock-check endpoint — this method now
-//      makes one v4 call PER skuId internally to preserve its old
-//      "give me stock for this array of skuIds" contract. A big batch (as
-//      stockSync.js can send) now costs N calls against a 30/min v4 rate
-//      limit instead of 1 call against v3's "40/60s, unlimited with
-//      itemId/skuId" limit — a real throughput regression worth watching.
-//   2. placeDirectOrder(): v4's documented request fields have no
-//      faceValue at all (v3 had it, for custom-denomination top-ups) —
-//      see that method for how this is handled.
+// ONE REMAINING KNOWN GAP vs v3, called out at the exact method it affects
+// below:
+//   getStock(): v4 has no batch stock-check endpoint — this method now
+//   makes one v4 call PER skuId internally to preserve its old "give me
+//   stock for this array of skuIds" contract. A big batch (as
+//   stockSync.js can send) now costs N calls against a 30/min v4 rate
+//   limit instead of 1 call against v3's "40/60s, unlimited with
+//   itemId/skuId" limit — a real throughput regression worth watching.
+//
+// (A second gap — placeDirectOrder()'s custom face values having no
+// documented v4 field — is now MOOT: Direct Top-Up products/orders are
+// out of scope per a 2026-10-06 business decision. getDirectParam/
+// apiTopUpParamCheck/placeDirectOrder below are left implemented but
+// dormant rather than removed — see routes/topup.routes.js's header.)
 'use strict';
 
 const axios = require('axios');
@@ -519,6 +523,17 @@ class WgCardsService {
     return { current: data?.page, size: data?.size, total: data?.total, records };
   }
 
+  // getDirectParam / apiTopUpParamCheck / placeDirectOrder (Flow F, steps
+  // 1-3) — OUT OF SCOPE (2026-10-06): Direct Top-Up products/orders are
+  // not being catered to per a business decision. Left implemented
+  // (translated to v4's wire shape) rather than removed, since nothing
+  // can reach them with a real product today — Direct Top-Up products are
+  // already excluded from the customer catalog entirely (the spuType:5
+  // filter in userProduct.service.js#getClientProducts). See
+  // routes/topup.routes.js's header for the full "why leave this dormant"
+  // note. Revisit the faceValue gap on placeDirectOrder below before ever
+  // resurrecting this.
+
   /** getDirectParam — Flow F step 1. v4 drops the userId body field
    * (identity via token) and adds an explicit `notExist` flag; paramInfos
    * shape itself is unchanged. */
@@ -539,18 +554,16 @@ class WgCardsService {
    * response is flat like placeOrder's, business rejections arriving as
    * HTTP 400 the same way.
    *
-   * GAP, not just a rename: v4's documented request fields for this
-   * endpoint have NO faceValue field at all — v3 used it for
-   * custom-denomination top-ups (wgcardsTopup.service.js's
+   * GAP, not just a rename (now MOOT — see the OUT OF SCOPE note above,
+   * kept here in case this is ever revisited): v4's documented request
+   * fields for this endpoint have NO faceValue field at all — v3 used it
+   * for custom-denomination top-ups (wgcardsTopup.service.js's
    * initiateTopup still passes it through for is_custom_value SKUs). The
    * v4 doc doesn't say what happens if an undocumented field is sent —
    * most REST backends just ignore it, but this is UNCONFIRMED. Sent
    * anyway (better than silently dropping the amount with no signal) with
    * a loud warning, so a real failure here points straight at this
-   * comment instead of looking like a generic rejection. Do not enable
-   * custom-value Direct Top-Up SKUs against v4 in production until this
-   * is confirmed live or WgCards confirms how custom face values work
-   * under v4.
+   * comment instead of looking like a generic rejection.
    */
   async placeDirectOrder({ skuId, faceValue, currency = 'USD', serviceOrder, webhook, attributeValues }) {
     const payload = {

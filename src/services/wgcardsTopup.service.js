@@ -1,4 +1,10 @@
 // services/wgcardsTopup.service.js
+//
+// OUT OF SCOPE (2026-10-06): business decision — Direct Top-Up products/
+// orders are not being catered to. Left wired up rather than removed —
+// see routes/topup.routes.js's header for why this is safe to leave
+// dormant rather than needing to be torn out.
+//
 // Flow F — WgCards Direct Top-Up. Orchestrates getDirectParam ->
 // apiTopUpParamCheck -> placeDirectOrder, the wallet debit/refund around
 // it, and the shared resolution logic used by both the inbound webhook

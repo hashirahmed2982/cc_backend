@@ -2,6 +2,16 @@
 // Client-facing Flow F (WgCards Direct Top-Up) endpoints. The inbound
 // WgCards webhook itself lives outside this router — see
 // routes/webhooks/wgcardsTopup.js, mounted directly on app.js with no auth.
+//
+// OUT OF SCOPE (2026-10-06): business decision — Direct Top-Up products/
+// orders are not being catered to. Left wired up and working rather than
+// removed, since Direct Top-Up products are already excluded from the
+// customer catalog entirely (the spuType:5 filter in
+// userProduct.service.js#getClientProducts), so nothing can reach these
+// endpoints with a real product today regardless. Revisit before
+// resurrecting this — wgcards.service.js's placeDirectOrder() has an
+// unconfirmed gap around custom face values under the v4 API (see that
+// method's comment) that was never resolved, just deprioritized.
 'use strict';
 
 const express = require('express');

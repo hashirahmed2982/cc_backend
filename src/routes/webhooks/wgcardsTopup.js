@@ -1,4 +1,10 @@
 // routes/webhooks/wgcardsTopup.js
+//
+// OUT OF SCOPE (2026-10-06): business decision — Direct Top-Up products/
+// orders are not being catered to. Left wired up rather than removed —
+// see routes/topup.routes.js's header for why this is safe to leave
+// dormant rather than needing to be torn out.
+//
 // Inbound webhook — WgCards Direct Top-Up result notification. Migrated to
 // v4's unified webhook payload (shared by card orders and direct top-ups
 // now) — NOT the v3 Annex III shape anymore. Deliberately NOT behind
