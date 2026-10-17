@@ -177,18 +177,61 @@ async function findAndRefreshProduct(itemRaw) {
 
 /** Refresh an already-catalogued SKU's product_skus row — used for both
  * "already linked" and "linked but the link row itself was missing"
- * (a pre-existing-data gap this job backfills rather than re-stages). */
-async function refreshSku(skuId, mapped) {
+ * (a pre-existing-data gap this job backfills rather than re-stages).
+ *
+ * selling_price is deliberately NOT normally touched here — once it's
+ * been set (by an admin, or the initial default-margin auto-price on
+ * first sync), a routine catalog refresh never silently changes it. The
+ * ONE exception: if the supplier's live cost has risen above the
+ * EXISTING selling_price, this UPDATE would otherwise violate
+ * product_skus' own chk_prices CHECK constraint (selling_price >=
+ * cost_price) outright — confirmed live on UAT (2026-10-17), where this
+ * is exactly what happened to a real WgCards SKU right after enabling
+ * v4. Rather than let that throw and leave cost_price stuck stale
+ * forever (every future sync hits the identical error, never catching
+ * up — the SKU silently falls through the cracks), selling_price is
+ * bumped just enough to clear the new cost at the configured default
+ * margin, and needs_review is set so an admin sees it was auto-adjusted
+ * and can set something more deliberate than the raw default margin. */
+async function refreshSku(skuId, mapped, defaultMarginPercent) {
   return db.transaction(async (conn) => {
-    // selling_price is deliberately NOT in this UPDATE — never overwritten once set.
-    await conn.execute(
-      `UPDATE product_skus SET
-         sku_name = ?, face_value = ?, is_custom_value = ?, min_face_value = ?, max_face_value = ?,
-         cost_price = ?, price_currency = ?
-       WHERE sku_id = ?`,
-      [mapped.skuName, mapped.faceValue, mapped.isCustomValue ? 1 : 0, mapped.minFaceValue, mapped.maxFaceValue,
-        mapped.costPrice, mapped.priceCurrency, skuId]
-    );
+    const [rows] = await conn.execute('SELECT selling_price FROM product_skus WHERE sku_id = ? FOR UPDATE', [skuId]);
+    const currentSellingPrice = Array.isArray(rows) && rows.length ? Number(rows[0].selling_price) : null;
+
+    // Never auto-adjust against a non-USD cost — see mapSkuForUpsert's
+    // header on why a non-USD cost can't be safely compared to a USD
+    // selling price at all; that case is already flagged via the
+    // non-USD warning log above this function's call site.
+    const costRisesAboveSellingPrice = currentSellingPrice != null
+      && mapped.priceCurrency.toUpperCase() === 'USD'
+      && mapped.costPrice > currentSellingPrice;
+
+    if (costRisesAboveSellingPrice) {
+      const bumpedSellingPrice = computeDefaultSellingPrice(mapped.costPrice, defaultMarginPercent);
+      logger.warn(
+        `catalogSync: wgcards sku ${mapped.wgcardsSkuId}'s live cost ($${mapped.costPrice}) rose above its current ` +
+        `selling_price ($${currentSellingPrice}) — auto-bumping selling_price to $${bumpedSellingPrice} (default ` +
+        `margin) and flagging needs_review rather than leaving this SKU's cost_price stuck stale indefinitely.`
+      );
+      await conn.execute(
+        `UPDATE product_skus SET
+           sku_name = ?, face_value = ?, is_custom_value = ?, min_face_value = ?, max_face_value = ?,
+           cost_price = ?, price_currency = ?, selling_price = ?, needs_review = 1
+         WHERE sku_id = ?`,
+        [mapped.skuName, mapped.faceValue, mapped.isCustomValue ? 1 : 0, mapped.minFaceValue, mapped.maxFaceValue,
+          mapped.costPrice, mapped.priceCurrency, bumpedSellingPrice, skuId]
+      );
+    } else {
+      // selling_price is deliberately NOT in this UPDATE — never overwritten once set.
+      await conn.execute(
+        `UPDATE product_skus SET
+           sku_name = ?, face_value = ?, is_custom_value = ?, min_face_value = ?, max_face_value = ?,
+           cost_price = ?, price_currency = ?
+         WHERE sku_id = ?`,
+        [mapped.skuName, mapped.faceValue, mapped.isCustomValue ? 1 : 0, mapped.minFaceValue, mapped.maxFaceValue,
+          mapped.costPrice, mapped.priceCurrency, skuId]
+      );
+    }
     await ensureInventoryRowConn(conn, skuId);
   });
 }
@@ -273,17 +316,17 @@ async function stageSku(itemRaw, sku, mapped) {
  * gap, not a new item) -> backfill the link; the item itself is already a
  * known product -> add this as a new denomination, no review; otherwise
  * -> stage (or skip, for Direct Top-Up) for admin review. */
-async function resolveOrStageSku(itemRaw, sku, mapped, existingProductId, isDirectTopUp) {
+async function resolveOrStageSku(itemRaw, sku, mapped, existingProductId, isDirectTopUp, defaultMarginPercent) {
   const existingLink = await supplierLinksRepo.getLinkBySupplierRef('wgcards', mapped.wgcardsSkuId);
   if (existingLink) {
-    await refreshSku(existingLink.sku_id, mapped);
+    await refreshSku(existingLink.sku_id, mapped, defaultMarginPercent);
     await linkSku(existingLink.sku_id, itemRaw, mapped);
     return 'link_refreshed';
   }
 
   const existingSkuRow = await db.queryOne('SELECT sku_id FROM product_skus WHERE wgcards_sku_id = ?', [mapped.wgcardsSkuId]);
   if (existingSkuRow) {
-    await refreshSku(existingSkuRow.sku_id, mapped);
+    await refreshSku(existingSkuRow.sku_id, mapped, defaultMarginPercent);
     await linkSku(existingSkuRow.sku_id, itemRaw, mapped);
     return 'link_backfilled';
   }
@@ -321,7 +364,7 @@ async function syncOneItem(itemRaw, defaultMarginPercent) {
     }
 
     try {
-      const outcome = await resolveOrStageSku(itemRaw, sku, mapped, existingProductId, isDirectTopUp);
+      const outcome = await resolveOrStageSku(itemRaw, sku, mapped, existingProductId, isDirectTopUp, defaultMarginPercent);
       outcomes[outcome] = (outcomes[outcome] || 0) + 1;
     } catch (err) {
       // A single bad SKU must never take down the rest of this item's

@@ -204,6 +204,29 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
     expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
   });
 
+  test('already linked, but live cost rose above the existing selling_price -> auto-bumps selling_price (default margin) and flags needs_review instead of violating chk_prices', async () => {
+    // Confirmed live on UAT (2026-10-17): a real WgCards SKU's cost went
+    // up past its already-set selling_price and the plain UPDATE in
+    // refreshSku threw "Check constraint 'chk_prices' is violated."
+    db.queryOne.mockResolvedValueOnce({ product_id: 501 });
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce({ sku_id: 9001 });
+    const execute = jest.fn(async (sql) => {
+      if (/SELECT selling_price FROM product_skus/.test(sql)) return [[{ selling_price: 7 }]]; // existing price: $7, below the incoming cost of $8
+      if (/UPDATE product_skus SET/.test(sql)) return [{}];
+      if (/SELECT inventory_id FROM inventory/.test(sql)) return [[]];
+      if (/INSERT INTO inventory/.test(sql)) return [{}];
+      return [{}];
+    });
+    db.transaction.mockImplementation(async (cb) => cb({ execute }));
+
+    const result = await syncOneItem(itemRaw, 20); // margin 20% -> computeDefaultSellingPrice(8, 20) = 9.6
+
+    expect(result.outcomes).toMatchObject({ link_refreshed: 1 });
+    const updateCall = execute.mock.calls.find(([sql]) => /UPDATE product_skus SET/.test(sql));
+    expect(updateCall[0]).toContain('needs_review = 1');
+    expect(updateCall[1]).toEqual(expect.arrayContaining([9.6])); // bumped selling_price
+  });
+
   test('product_sku already exists but its link row is missing -> backfills the link, does NOT stage (avoids a duplicate product)', async () => {
     db.queryOne.mockResolvedValueOnce(null); // no product found by spu_id (a pre-existing data gap)
     supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
