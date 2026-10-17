@@ -37,6 +37,7 @@
  *   WGCARDS_HOST, WGCARDS_APP_ID, WGCARDS_SECRET, WGCARDS_BODY_KEY_MATERIAL
  */
 
+require('dotenv').config();
 const axios = require('axios');
 const crypto = require('crypto');
 const CryptoJS = require('crypto-js');
