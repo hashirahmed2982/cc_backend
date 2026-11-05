@@ -134,9 +134,17 @@ class WgCardsService {
         validateStatus: () => true,
       });
     } catch (err) {
+      // requestBody (secret redacted, same as the success-path log below)
+      // was missing here — every network-level failure (timeout, DNS,
+      // connection refused) logged with no request shown at all in the
+      // admin's Integration Activity table, just the error message. Every
+      // other catch block in this file (_authedCall's) already included
+      // it; this was the one gap, and it's exactly the path that was
+      // firing on every one of 18 days of /api/v4/token timeouts.
       await supplierApiLog.log({
         supplierName: SUPPLIER, endpoint: `${V4_BASE}/token`, statusCode: 0,
-        responseTimeMs: Date.now() - start, errorMessage: err.message,
+        responseTimeMs: Date.now() - start, requestBody: { appId: cfg.app_id, secret: '***' },
+        errorMessage: err.message,
       });
       await supplierConfigRepo.recordFailure(SUPPLIER);
       throw err;

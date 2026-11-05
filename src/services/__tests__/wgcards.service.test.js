@@ -62,6 +62,27 @@ describe('WgCardsService (v4)', () => {
       expect(supplierConfigRepo.recordSuccess).toHaveBeenCalled();
     });
 
+    test('a network-level failure fetching the token (timeout, DNS, connection refused) still logs the request shape, not just the error', async () => {
+      // Real gap this closes: this catch block was the one place in the
+      // file that dropped requestBody entirely — every failed call showed
+      // as "–"/"–" for Request/Response in the admin's Integration
+      // Activity table, no matter how descriptive errorMessage was.
+      const supplierApiLog = require('../supplierApiLog.service');
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...BASE_CFG });
+      axios.post.mockRejectedValueOnce(new Error('timeout of 15000ms exceeded'));
+
+      await expect(wgcardsService.getAccount()).rejects.toThrow('timeout of 15000ms exceeded');
+
+      expect(supplierApiLog.log).toHaveBeenCalledWith(expect.objectContaining({
+        supplierName: 'wgcards',
+        endpoint: '/api/v4/token',
+        statusCode: 0,
+        requestBody: { appId: 'testAppId', secret: '***' }, // secret redacted, same as the success-path log
+        errorMessage: 'timeout of 15000ms exceeded',
+      }));
+      expect(supplierConfigRepo.recordFailure).toHaveBeenCalledWith('wgcards');
+    });
+
     test('reuses a cached token that is not close to expiring', async () => {
       supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...CACHED_CFG });
       axios.post.mockResolvedValueOnce(encryptedAxiosResponse(200, { accounts: [] }));
