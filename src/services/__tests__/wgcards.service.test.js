@@ -59,6 +59,25 @@ describe('WgCardsService (v4)', () => {
       expect(axios.post.mock.calls[1][2].headers.Authorization).toBe('Bearer fresh-token-abc');
       expect(result.accounts[0].balance).toBe(100); // parsed back to a number, matching v3's shape
       expect(supplierConfigRepo.saveToken).toHaveBeenCalledWith('wgcards', 'fresh-token-abc', expect.any(Date));
+    });
+
+    test('two concurrent calls that both need a fresh token only ever hit /api/v4/token once — confirmed live (2026-11-12): six cron jobs sharing one token with no coordination produced "still 401 (api.token.inactive) after forced token refresh", since v4 invalidates the previous token the moment a second one is issued for the same appId', async () => {
+      supplierConfigRepo.getBySupplierName.mockResolvedValue({ ...BASE_CFG }); // no cached token — both callers need to refresh
+      let tokenCallCount = 0;
+      axios.post.mockImplementation(async (url) => {
+        if (url.includes('/api/v4/token')) {
+          tokenCallCount++;
+          return { status: 200, data: { code: 200, msg: 'success', data: { accessToken: 'shared-token', expiresIn: 7200 } } };
+        }
+        return encryptedAxiosResponse(200, { accounts: [] });
+      });
+
+      const [resultA, resultB] = await Promise.all([wgcardsService.getAccount(), wgcardsService.getAccount()]);
+
+      expect(tokenCallCount).toBe(1); // only one /api/v4/token call, no matter how many callers raced for a token
+      expect(resultA).toEqual({ accounts: [] });
+      expect(resultB).toEqual({ accounts: [] });
+      expect(supplierConfigRepo.saveToken).toHaveBeenCalledTimes(1);
       expect(supplierConfigRepo.recordSuccess).toHaveBeenCalled();
     });
 

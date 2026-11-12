@@ -85,6 +85,12 @@ class SupplierBusinessError extends Error {
 }
 
 class WgCardsService {
+  constructor() {
+    // In-flight token-refresh promise, shared across every concurrent
+    // caller within this process — see _fetchNewTokenDeduped below.
+    this._tokenRefreshPromise = null;
+  }
+
   /** Loads the decrypted supplier_config row. v4 credential mapping onto
    * the existing (WgCards-v3-shaped) encrypted columns — no schema change
    * needed, same pattern gift2games already uses for its own placeholder
@@ -112,7 +118,40 @@ class WgCardsService {
     if (cfg.token && expiresAt - now > TOKEN_REFRESH_MARGIN_MS) {
       return cfg.token;
     }
-    return this._fetchNewToken(cfg);
+    return this._fetchNewTokenDeduped(cfg);
+  }
+
+  /**
+   * Confirmed live (2026-11-12): a catalogSync run failed with "still 401
+   * (api.token.inactive) after forced token refresh". Per the v4 doc, one
+   * appId keeps only ONE active token at a time — issuing a new one
+   * replaces (invalidates) whatever was in use. Six separate cron jobs
+   * (catalogSync, stockSync, orderPoller, healthCheck, balanceMonitor,
+   * wgcardsTopupReconciler) all share this one cached token with no
+   * coordination — if two of them decide to refresh around the same
+   * moment, each independently hitting /api/v4/token, whichever refreshes
+   * second silently invalidates the first one's brand-new token, and that
+   * first caller's very next request (even the one-retry-after-401 path)
+   * can lose the same race again.
+   *
+   * This collapses every concurrent refresh request within this process
+   * onto ONE shared in-flight promise, so only one /api/v4/token call
+   * ever happens at a time regardless of how many callers triggered it —
+   * everyone else just awaits the same result. Does NOT protect against a
+   * SEPARATE process (e.g. manually running scripts/test-wgcards-sandbox.js
+   * or smoke-test-wgcards-service.js against the same credentials while
+   * the server is also live) — that's a different process, different
+   * memory, and v4's one-token-per-appId design means that will always be
+   * able to invalidate this process's token regardless of any in-process
+   * fix. Avoid running those scripts against the same WGCARDS_APP_ID
+   * while the live server is running.
+   */
+  async _fetchNewTokenDeduped(cfg) {
+    if (this._tokenRefreshPromise) return this._tokenRefreshPromise;
+    this._tokenRefreshPromise = this._fetchNewToken(cfg).finally(() => {
+      this._tokenRefreshPromise = null;
+    });
+    return this._tokenRefreshPromise;
   }
 
   /**
@@ -186,7 +225,7 @@ class WgCardsService {
   async _authedCall(endpoint, payload, { _isRetry = false } = {}) {
     const cfg = await this._config();
     const token = _isRetry
-      ? await this._fetchNewToken(cfg)
+      ? await this._fetchNewTokenDeduped(cfg)
       : await this._getValidToken(cfg);
 
     const start = Date.now();
