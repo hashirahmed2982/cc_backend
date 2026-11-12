@@ -398,8 +398,30 @@ async function run({ pageSize = PAGE_SIZE } = {}) {
   let pages = 1;
 
   do {
-    const page = await wgcardsService.getItem({ itemId: '', current, size: pageSize });
-    pages = page.pages || 1;
+    // A single page's FETCH failing must never abort the rest of the
+    // catalog — confirmed live (2026-11-12): WgCards rejected one page
+    // outright with a business error (catalog.sku_price.unavailable, an
+    // item's price temporarily unavailable on their side), which this
+    // loop had no protection around at all, killing the entire sync and
+    // leaving every later page unprocessed. Same "one bad thing doesn't
+    // take down the rest" policy the per-item loop below already has —
+    // this just extends it one level up, to the page fetch itself.
+    let page;
+    try {
+      page = await wgcardsService.getItem({ itemId: '', current, size: pageSize });
+    } catch (err) {
+      logger.error(`catalogSync: failed to fetch page ${current}:`, err);
+      summary.errors.push({ page: current, error: err.message });
+      // pages stays at whatever the last successfully-fetched page
+      // reported (or its initial value of 1, if even the FIRST page
+      // failed — in which case the total page count is genuinely
+      // unknown, and stopping here rather than looping forever is the
+      // only sane fallback).
+      current++;
+      if (current <= pages) await sleep(PAGE_DELAY_MS);
+      continue;
+    }
+    pages = page.pages || pages;
     const records = page.records || [];
 
     for (const itemRaw of records) {

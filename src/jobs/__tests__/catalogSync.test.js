@@ -3,10 +3,12 @@
 jest.mock('../../repositories/supplierConfig.repository');
 jest.mock('../../repositories/supplierLinks.repository');
 jest.mock('../../config/database');
+jest.mock('../../services/wgcards.service');
 
 const supplierConfigRepo = require('../../repositories/supplierConfig.repository');
 const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
 const db = require('../../config/database');
+const wgcardsService = require('../../services/wgcards.service');
 const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, buildMatchKey, syncOneItem } = require('../catalogSync');
 
 describe('buildMatchKey', () => {
@@ -133,6 +135,38 @@ describe('catalogSync.run', () => {
     supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 0 });
     const result = await run();
     expect(result).toEqual({ skipped: true, reason: 'supplier_disabled' });
+  });
+
+  test('a later page fetch failing does not abort the rest of the catalog — remaining pages still get tried', async () => {
+    // Confirmed live (2026-11-12): WgCards rejected one page outright with
+    // a business error (catalog.sku_price.unavailable) and the whole sync
+    // died, leaving every later page unprocessed.
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 1 });
+    db.queryOne.mockResolvedValueOnce({ setting_value: '20' }); // getDefaultMarginPercent
+    wgcardsService.getItem
+      .mockResolvedValueOnce({ pages: 3, records: [] })
+      .mockRejectedValueOnce(new Error('WgCards getItemAndStock failed: HTTP 400 (catalog.sku_price.unavailable)'))
+      .mockResolvedValueOnce({ pages: 3, records: [] });
+
+    jest.useFakeTimers();
+    const runPromise = run();
+    await jest.runAllTimersAsync();
+    const result = await runPromise;
+    jest.useRealTimers();
+
+    expect(wgcardsService.getItem).toHaveBeenCalledTimes(3); // page 2's failure didn't stop page 3 from being fetched
+    expect(result.errors).toEqual([{ page: 2, error: expect.stringContaining('catalog.sku_price.unavailable') }]);
+  });
+
+  test('the very first page failing stops the sync rather than looping forever (total page count is genuinely unknown)', async () => {
+    supplierConfigRepo.getBySupplierName.mockResolvedValueOnce({ is_active: 1 });
+    db.queryOne.mockResolvedValueOnce({ setting_value: '20' });
+    wgcardsService.getItem.mockRejectedValueOnce(new Error('timeout of 15000ms exceeded'));
+
+    const result = await run();
+
+    expect(wgcardsService.getItem).toHaveBeenCalledTimes(1); // no runaway retry loop
+    expect(result.errors).toEqual([{ page: 1, error: 'timeout of 15000ms exceeded' }]);
   });
 });
 
