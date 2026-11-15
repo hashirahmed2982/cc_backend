@@ -169,6 +169,8 @@ CREATE TABLE IF NOT EXISTS products (
     category VARCHAR(100) NULL,
     product_type ENUM('game', 'gift_card', 'subscription', 'other') NOT NULL DEFAULT 'gift_card',
     spu_type INT NULL,
+    is_custom_value TINYINT(1) NOT NULL DEFAULT 0
+        COMMENT 'Floating/custom-amount SKU (min/max range, no fixed face value) — excluded from customer listing + checkout; never deleted so re-including later needs no re-sync',
     region VARCHAR(50) NULL,
     currency_code VARCHAR(3) NOT NULL DEFAULT 'USD',
     image_url VARCHAR(500) NULL,
@@ -211,7 +213,7 @@ CREATE TABLE IF NOT EXISTS product_skus (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
     INDEX idx_product_id (product_id),
-    INDEX idx_wgcards_sku_id (wgcards_sku_id),
+    UNIQUE INDEX idx_wgcards_sku_id (wgcards_sku_id),
     INDEX idx_is_active (is_active),
     CONSTRAINT chk_prices CHECK (selling_price >= cost_price)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

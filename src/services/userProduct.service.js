@@ -211,7 +211,14 @@ async getClientProducts(userId, { search, category, page = 1, limit = 50 } = {})
       // Direct Top-Up (spuType:5) products are never sellable through this
       // checkout — hidden here too, NULL-safe so internal/non-WgCards
       // products (spu_type IS NULL) aren't accidentally excluded.
-      const conds  = ['p.is_active = 1', '(p.spu_type IS NULL OR p.spu_type != ?)'];
+      // Floating/custom-value products (a min/max amount range, no fixed
+      // face value) get the same treatment — see migration 019's header —
+      // there's no amount-entry step anywhere in checkout for them yet.
+      const conds  = [
+        'p.is_active = 1',
+        '(p.spu_type IS NULL OR p.spu_type != ?)',
+        '(p.is_custom_value IS NULL OR p.is_custom_value = 0)',
+      ];
       const params = [DIRECT_TOPUP_SPU_TYPE];
  
       // NOT EXISTS deny check — 1st ?

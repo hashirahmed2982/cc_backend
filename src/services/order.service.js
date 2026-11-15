@@ -103,7 +103,7 @@ class OrderService {
 
         // Get product
         const [prodRows] = await conn.execute(
-          'SELECT product_id, product_name, source, is_active, spu_type FROM products WHERE product_id = ?',
+          'SELECT product_id, product_name, source, is_active, spu_type, is_custom_value FROM products WHERE product_id = ?',
           [productId]
         );
         if (!prodRows.length) throw new Error(`Product ${productId} not found`);
@@ -118,6 +118,18 @@ class OrderService {
           // for now (no purchase flow exists to collect the account/
           // player-ID fields Flow F actually needs).
           throw new Error(`Product "${prodRows[0].product_name}" is a Direct Top-Up product and cannot be ordered through the regular checkout`);
+        }
+        if (prodRows[0].is_custom_value) {
+          // Same rationale, different cause (migration 019): a floating
+          // denomination (min/max amount range, no fixed face value) has
+          // no fixed price for this to charge — unitPrice below is always
+          // read straight off product_skus.selling_price, and there's no
+          // amount-entry step anywhere in checkout to collect one instead.
+          // getClientProducts already hides these from the storefront; this
+          // is the same last-resort door-stop Direct Top-Up has, in case
+          // one is ever reached some other way (a stale link, a direct
+          // productId).
+          throw new Error(`Product "${prodRows[0].product_name}" is a custom-amount product and cannot be ordered through the regular checkout`);
         }
 
         // Get primary active SKU (or specific one if provided)

@@ -187,11 +187,22 @@ async function createNewFromStaging({ stagingId, reviewedBy, sellingPrice, categ
     // other way.
     const spuId = item.supplier === 'wgcards' ? item.supplier_ref : null;
 
+    // One product per SKU, not per item (migration 019 — confirmed
+    // directly by WgCards 2026-11-15 that denominations are sold/ordered
+    // independently). Several staged entries can share the same
+    // item_name/spuId (one per sibling denomination of the same item), so
+    // the face value is baked into product_name here too — otherwise
+    // every denomination of the same item would create a product with an
+    // identical, indistinguishable name.
+    const productName = item.face_value != null
+      ? `${item.item_name} - ${item.face_value} ${currency}`
+      : item.item_name;
+
     const [pr] = await conn.execute(
       `INSERT INTO products
          (product_name, brand_name, category, is_active, source, supplier_name, supplier_ref, spu_id, sync_enabled)
        VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1)`,
-      [item.item_name, item.brand_name || null, category || null, item.supplier, item.supplier, item.supplier_ref || null, spuId]
+      [productName, item.brand_name || null, category || null, item.supplier, item.supplier, item.supplier_ref || null, spuId]
     );
     productId = pr.insertId;
 

@@ -9,7 +9,7 @@ const supplierConfigRepo = require('../../repositories/supplierConfig.repository
 const supplierLinksRepo = require('../../repositories/supplierLinks.repository');
 const db = require('../../config/database');
 const wgcardsService = require('../../services/wgcards.service');
-const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, buildMatchKey, syncOneItem } = require('../catalogSync');
+const { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, composeProductName, buildMatchKey, syncOneItem } = require('../catalogSync');
 
 describe('buildMatchKey', () => {
   beforeEach(() => jest.clearAllMocks());
@@ -126,6 +126,32 @@ describe('catalogSync pure mapping', () => {
       expect(result.priceCurrency).toBe('USD');
     });
   });
+
+  describe('composeProductName — one product per SKU, so the denomination must be in the name', () => {
+    test('fixed face value -> item name + face value + currency', () => {
+      const name = composeProductName(
+        { itemName: 'Nintendo Japan' },
+        { faceValue: 50, priceCurrency: 'JPY', skuName: '50 JPY' }
+      );
+      expect(name).toBe('Nintendo Japan - 50 JPY');
+    });
+
+    test('no face value but a distinct sku name -> item name + sku name', () => {
+      const name = composeProductName(
+        { itemName: 'WebMoney' },
+        { faceValue: null, priceCurrency: 'USD', skuName: 'WMZ Voucher' }
+      );
+      expect(name).toBe('WebMoney - WMZ Voucher');
+    });
+
+    test('no face value and sku name matches item name -> item name alone, not duplicated', () => {
+      const name = composeProductName(
+        { itemName: 'Some Item' },
+        { faceValue: null, priceCurrency: 'USD', skuName: 'Some Item' }
+      );
+      expect(name).toBe('Some Item');
+    });
+  });
 });
 
 describe('catalogSync.run', () => {
@@ -170,11 +196,12 @@ describe('catalogSync.run', () => {
   });
 });
 
-describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (no more bypassing it)', () => {
+describe('catalogSync.syncOneItem — one product per SKU (migration 019), routed through Master Plan §9.2 staging', () => {
   function fakeConn() {
     return {
       execute: jest.fn(async (sql) => {
         if (/UPDATE product_skus SET/.test(sql)) return [{}];
+        if (/UPDATE products SET/.test(sql)) return [{}];
         if (/INSERT INTO product_skus/.test(sql)) return [{ insertId: 9001 }];
         if (/SELECT inventory_id FROM inventory/.test(sql)) return [[]];
         if (/INSERT INTO inventory/.test(sql)) return [{}];
@@ -196,15 +223,13 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
     supplierLinksRepo.getCanonicalBrand.mockImplementation(async (b) => (b || '').toLowerCase());
   });
 
-  test('genuinely new item, unlinked sku -> staged for review, product/sku tables never touched', async () => {
-    db.queryOne.mockResolvedValueOnce(null); // findAndRefreshProduct: no existing product
-    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
-    db.queryOne.mockResolvedValueOnce(null); // no product_sku by wgcards_sku_id either
+  test('genuinely new sku -> staged for review, product/sku tables never touched', async () => {
+    db.queryOne.mockResolvedValueOnce(null); // no product_skus row for this wgcards_sku_id
     supplierLinksRepo.getStagingItemBySupplierRef.mockResolvedValueOnce(null);
 
     const result = await syncOneItem(itemRaw, 20);
 
-    expect(result.outcomes).toMatchObject({ newly_staged: 1, link_refreshed: 0, sku_added: 0, topup_skipped: 0 });
+    expect(result.outcomes).toMatchObject({ newly_staged: 1, link_refreshed: 0, topup_skipped: 0, custom_value_skipped: 0 });
     expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalledWith(
       // faceValueCurrency mirrors currency for WgCards — it has no separate
       // face-value-currency field the way Gift2Games does (see migration 016).
@@ -212,11 +237,10 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
     );
     expect(db.transaction).not.toHaveBeenCalled();
     expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
+    expect(supplierLinksRepo.getLinkBySupplierRef).not.toHaveBeenCalled(); // never-seen sku short-circuits before the link check
   });
 
-  test('genuinely new item that is Direct Top-Up -> skipped entirely, never staged (client decision: never sold)', async () => {
-    db.queryOne.mockResolvedValueOnce(null);
-    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
+  test('genuinely new sku that is Direct Top-Up -> skipped entirely, never staged (client decision: never sold)', async () => {
     db.queryOne.mockResolvedValueOnce(null);
 
     const result = await syncOneItem({ ...itemRaw, spuType: 5 }, 20);
@@ -225,28 +249,54 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
     expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
   });
 
-  test('already linked -> refreshes product_skus + the link, no staging at all', async () => {
-    db.queryOne.mockResolvedValueOnce({ product_id: 501 }); // findAndRefreshProduct finds it
+  test('genuinely new sku that is floating/custom-value (min !== max) -> skipped entirely, never staged (no amount-entry flow in checkout)', async () => {
+    const customValueItem = {
+      ...itemRaw,
+      skus: [{ skuId: '999', skuName: 'Custom Topup', minFaceValue: 5, maxFaceValue: 500, skuPrice: 1, skuPriceCurrency: 'USD' }],
+    };
+    db.queryOne.mockResolvedValueOnce(null);
+
+    const result = await syncOneItem(customValueItem, 20);
+
+    expect(result.outcomes).toMatchObject({ custom_value_skipped: 1, newly_staged: 0, topup_skipped: 0 });
+    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
+  });
+
+  test('a new denomination on an already-known ITEM is still a brand-new SKU -> staged, not auto-added (denominations are independent, not variants)', async () => {
+    // Confirmed directly by WgCards (2026-11-15): sibling denominations of
+    // the same item are sold/ordered independently — "already known item"
+    // no longer shortcuts a new sku straight into product_skus.
+    db.queryOne.mockResolvedValueOnce(null); // this exact wgcards_sku_id has never been catalogued
+
+    const result = await syncOneItem(itemRaw, 20);
+
+    expect(result.outcomes).toMatchObject({ newly_staged: 1 });
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(supplierLinksRepo.upsertStagingItem).toHaveBeenCalled();
+  });
+
+  test('already catalogued and linked -> refreshes product_skus + its one product + the link, no staging at all', async () => {
+    db.queryOne.mockResolvedValueOnce({ sku_id: 9001, product_id: 501 });
     supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce({ sku_id: 9001 });
 
     const result = await syncOneItem(itemRaw, 20);
 
     expect(result.outcomes).toMatchObject({ link_refreshed: 1 });
-    expect(db.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE products SET'), expect.any(Array));
-    expect(db.transaction).toHaveBeenCalledTimes(1); // the UPDATE product_skus + inventory-ensure transaction
+    expect(db.transaction).toHaveBeenCalledTimes(1); // product + sku + inventory-ensure, one transaction
     expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(expect.objectContaining({ skuId: 9001, supplier: 'wgcards' }));
     expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
   });
 
-  test('already linked, but live cost rose above the existing selling_price -> auto-bumps selling_price (default margin) and flags needs_review instead of violating chk_prices', async () => {
+  test('already catalogued, but live cost rose above the existing selling_price -> auto-bumps selling_price (default margin) and flags needs_review instead of violating chk_prices', async () => {
     // Confirmed live on UAT (2026-10-17): a real WgCards SKU's cost went
     // up past its already-set selling_price and the plain UPDATE in
     // refreshSku threw "Check constraint 'chk_prices' is violated."
-    db.queryOne.mockResolvedValueOnce({ product_id: 501 });
+    db.queryOne.mockResolvedValueOnce({ sku_id: 9001, product_id: 501 });
     supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce({ sku_id: 9001 });
     const execute = jest.fn(async (sql) => {
       if (/SELECT selling_price FROM product_skus/.test(sql)) return [[{ selling_price: 7 }]]; // existing price: $7, below the incoming cost of $8
       if (/UPDATE product_skus SET/.test(sql)) return [{}];
+      if (/UPDATE products SET/.test(sql)) return [{}];
       if (/SELECT inventory_id FROM inventory/.test(sql)) return [[]];
       if (/INSERT INTO inventory/.test(sql)) return [{}];
       return [{}];
@@ -262,9 +312,8 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
   });
 
   test('product_sku already exists but its link row is missing -> backfills the link, does NOT stage (avoids a duplicate product)', async () => {
-    db.queryOne.mockResolvedValueOnce(null); // no product found by spu_id (a pre-existing data gap)
-    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
-    db.queryOne.mockResolvedValueOnce({ sku_id: 9001 }); // but the product_sku itself already exists
+    db.queryOne.mockResolvedValueOnce({ sku_id: 9001, product_id: 501 }); // the product_sku itself already exists
+    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null); // but its link row is a pre-existing data gap
 
     const result = await syncOneItem(itemRaw, 20);
 
@@ -273,23 +322,8 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
     expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
   });
 
-  test('a new denomination on an already-known item -> added directly, no review needed', async () => {
-    db.queryOne.mockResolvedValueOnce({ product_id: 501 }); // the ITEM is already known
-    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
-    db.queryOne.mockResolvedValueOnce(null); // but THIS sku hasn't been seen before
-
-    const result = await syncOneItem(itemRaw, 20);
-
-    expect(result.outcomes).toMatchObject({ sku_added: 1, newly_staged: 0 });
-    expect(db.transaction).toHaveBeenCalledTimes(1); // the INSERT product_skus + inventory-ensure transaction
-    expect(supplierLinksRepo.upsertLink).toHaveBeenCalledWith(expect.objectContaining({ skuId: 9001 }));
-    expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
-  });
-
   test('a non-USD sku still syncs (no margin-inflated price) when staged, recorded in its real currency', async () => {
     const cnyItem = { ...itemRaw, skus: [{ ...itemRaw.skus[0], skuPrice: 41.39, skuPriceCurrency: 'CNY' }] };
-    db.queryOne.mockResolvedValueOnce(null);
-    supplierLinksRepo.getLinkBySupplierRef.mockResolvedValueOnce(null);
     db.queryOne.mockResolvedValueOnce(null);
 
     const result = await syncOneItem(cnyItem, 20);
@@ -301,11 +335,10 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
   });
 
   test('a SKU with no skuPrice is skipped entirely — never reaches the DB or staging', async () => {
-    db.queryOne.mockResolvedValueOnce(null); // findAndRefreshProduct
-
     const result = await syncOneItem({ itemId: '77', skus: [{ skuId: '999' }] }, 20);
 
     expect(result.outcomes.skipped_no_price).toBe(1);
+    expect(db.queryOne).not.toHaveBeenCalled();
     expect(supplierLinksRepo.upsertLink).not.toHaveBeenCalled();
     expect(supplierLinksRepo.upsertStagingItem).not.toHaveBeenCalled();
   });
@@ -318,7 +351,9 @@ describe('catalogSync.syncOneItem — routed through Master Plan §9.2 staging (
         { skuId: '2', skuName: 'B', minFaceValue: 2, maxFaceValue: 2, skuPrice: 2, skuPriceCurrency: 'USD' },
       ],
     };
-    db.queryOne.mockResolvedValueOnce({ product_id: 501 }); // item already known
+    db.queryOne
+      .mockResolvedValueOnce({ sku_id: 111, product_id: 501 }) // sku 1: already catalogued
+      .mockResolvedValueOnce({ sku_id: 222, product_id: 501 }); // sku 2: already catalogued
     supplierLinksRepo.getLinkBySupplierRef
       .mockResolvedValueOnce({ sku_id: 111 }) // sku 1: already linked
       .mockResolvedValueOnce({ sku_id: 222 }); // sku 2: already linked

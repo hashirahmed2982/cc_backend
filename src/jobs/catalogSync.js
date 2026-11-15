@@ -15,18 +15,28 @@
 // separate "canonical catalog" to match against. Now that multiple
 // suppliers exist (and internal products predate WgCards too — there was
 // always something to match against, this job just never did), a
-// genuinely NEW item is staged into supplier_catalog_items for admin
-// review via catalogMatching.service.js, exactly like
-// gift2gamesCatalogSync.js already does. Three cases per item:
-//   1. Item already known (products.spu_id/source matches) -> routine
-//      refresh + add any new denomination directly, no review needed —
-//      matching only matters for a genuinely new item, not a new size of
-//      something already confirmed real.
-//   2. Item unrecognized, but Direct Top-Up (spuType:5) -> skipped
-//      entirely, not even staged. Client decision: "we would not sell
-//      those" — staging something that can only ever be rejected is just
-//      admin busywork.
-//   3. Item unrecognized, sellable -> staged for review (§9.2).
+// genuinely NEW sku is staged into supplier_catalog_items for admin review
+// via catalogMatching.service.js, exactly like gift2gamesCatalogSync.js
+// already does.
+//
+// ONE PRODUCT PER SKU, NOT PER ITEM: confirmed directly by WgCards
+// (2026-11-15) — the SKUs under one item ("SPU") are independent,
+// sold/ordered independently, not variants of one purchasable thing (e.g.
+// Nintendo Japan's 50/100/150 JPY SKUs are three unrelated products to
+// WgCards, not three denominations of one product). So "already known" is
+// decided per wgcards_sku_id, not per item/spu_id — a sibling denomination
+// of an already-catalogued item is still a brand-new SKU as far as this
+// job is concerned. Three cases per SKU:
+//   1. SKU already catalogued (product_skus.wgcards_sku_id matches) ->
+//      routine refresh of that SKU's product + sku rows, no review needed.
+//   2. SKU never seen before, but Direct Top-Up (spuType:5) OR
+//      floating/custom-value (a min/max range, no fixed face value — no
+//      fixed price for checkout to charge) -> skipped entirely, not even
+//      staged. Client decision for Direct Top-Up: "we would not sell
+//      those"; custom-value gets the same treatment since there's no
+//      amount-entry flow anywhere in checkout yet. Staging something that
+//      can only ever be rejected is just admin busywork.
+//   3. SKU never seen before, sellable -> staged for review (§9.2).
 //
 // Usage:
 //   node src/jobs/catalogSync.js            — full sync, all pages
@@ -87,6 +97,24 @@ function computeDefaultSellingPrice(costPrice, defaultMarginPercent) {
   return Math.round(costPrice * (1 + margin / 100) * 100) / 100;
 }
 
+/** One product per WgCards SKU (confirmed directly by WgCards 2026-11-15:
+ * SKUs under an item are independent, sold/ordered independently — not
+ * variants of one product). The item's own name alone would make every
+ * sibling denomination's product look identical in the listing, so the
+ * denomination is baked in: prefer the numeric face value (unambiguous),
+ * falling back to the sku's own name when there's no fixed face value to
+ * show (a custom-value sku reaching this is a pre-existing/legacy row —
+ * new ones are filtered out before ever reaching product creation). */
+function composeProductName(itemRaw, mapped) {
+  if (mapped.faceValue != null) {
+    return `${itemRaw.itemName} - ${mapped.faceValue} ${mapped.priceCurrency}`;
+  }
+  if (mapped.skuName && mapped.skuName !== itemRaw.itemName) {
+    return `${itemRaw.itemName} - ${mapped.skuName}`;
+  }
+  return itemRaw.itemName;
+}
+
 /** Build the full set of DB-shaped fields for one WgCards sku record.
  *
  * CURRENCY: catalogSync.js always requests getItem({currencyCode:'USD'}),
@@ -145,39 +173,11 @@ async function getDefaultMarginPercent() {
   return row ? Number(row.setting_value) : 20;
 }
 
-/** Item-level refresh only — never creates. Returns the existing
- * product_id, or null if this item has never been seen before (the
- * signal that decides staging vs routine-refresh in syncOneItem). */
-async function findAndRefreshProduct(itemRaw) {
-  const existing = await db.queryOne('SELECT product_id FROM products WHERE spu_id = ? AND source = ?', [
-    String(itemRaw.itemId),
-    'wgcards',
-  ]);
-  if (!existing) return null;
-
-  await db.query(
-    `UPDATE products SET
-       product_name = ?, brand_name = ?, description = ?, how_exchange = ?,
-       image_url = COALESCE(?, image_url), spu_type = ?, currency_code = ?,
-       last_synced_at = NOW()
-     WHERE product_id = ?`,
-    [
-      itemRaw.itemName,
-      itemRaw.itemBrandName || null,
-      itemRaw.description || null,
-      itemRaw.howExchange || null,
-      itemRaw.spuImage || null,
-      itemRaw.spuType ?? null,
-      itemRaw.currencyCode || 'USD',
-      existing.product_id,
-    ]
-  );
-  return existing.product_id;
-}
-
-/** Refresh an already-catalogued SKU's product_skus row — used for both
- * "already linked" and "linked but the link row itself was missing"
- * (a pre-existing-data gap this job backfills rather than re-stages).
+/** Refresh an already-catalogued SKU's product_skus row AND its
+ * (one-and-only, under the one-product-per-SKU model) products row, in
+ * one transaction — used for both "already linked" and "linked but the
+ * link row itself was missing" (a pre-existing-data gap this job
+ * backfills rather than re-stages).
  *
  * selling_price is deliberately NOT normally touched here — once it's
  * been set (by an admin, or the initial default-margin auto-price on
@@ -193,7 +193,7 @@ async function findAndRefreshProduct(itemRaw) {
  * bumped just enough to clear the new cost at the configured default
  * margin, and needs_review is set so an admin sees it was auto-adjusted
  * and can set something more deliberate than the raw default margin. */
-async function refreshSku(skuId, mapped, defaultMarginPercent) {
+async function refreshSku(skuId, productId, itemRaw, mapped, defaultMarginPercent) {
   return db.transaction(async (conn) => {
     const [rows] = await conn.execute('SELECT selling_price FROM product_skus WHERE sku_id = ? FOR UPDATE', [skuId]);
     const currentSellingPrice = Array.isArray(rows) && rows.length ? Number(rows[0].selling_price) : null;
@@ -232,30 +232,36 @@ async function refreshSku(skuId, mapped, defaultMarginPercent) {
           mapped.costPrice, mapped.priceCurrency, skuId]
       );
     }
+
+    // is_custom_value denormalized here from this product's one-and-only
+    // SKU — see migration 019. Kept in sync every refresh so a legacy
+    // custom-value product (one that predates this filter, or whose range
+    // changed from fixed to floating on WgCards' side) is still excluded
+    // at the customer-facing/checkout choke points even though it's never
+    // deleted.
+    await conn.execute(
+      `UPDATE products SET
+         product_name = ?, brand_name = ?, description = ?, how_exchange = ?,
+         image_url = COALESCE(?, image_url), spu_type = ?, currency_code = ?,
+         is_custom_value = ?, last_synced_at = NOW()
+       WHERE product_id = ?`,
+      [
+        composeProductName(itemRaw, mapped),
+        itemRaw.itemBrandName || null,
+        itemRaw.description || null,
+        itemRaw.howExchange || null,
+        itemRaw.spuImage || null,
+        itemRaw.spuType ?? null,
+        itemRaw.currencyCode || 'USD',
+        mapped.isCustomValue ? 1 : 0,
+        productId,
+      ]
+    );
+
     await ensureInventoryRowConn(conn, skuId);
   });
 }
 
-/** A new denomination on an ALREADY-KNOWN product — no staging, this
- * isn't a matching decision (the item itself is already confirmed real,
- * this is just a size WgCards added that we haven't seen yet). */
-async function createSkuUnderProduct(productId, mapped) {
-  return db.transaction(async (conn) => {
-    const [result] = await conn.execute(
-      `INSERT INTO product_skus
-         (product_id, wgcards_sku_id, sku_name, face_value, is_custom_value,
-          min_face_value, max_face_value, cost_price, selling_price, price_currency,
-          needs_review, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`,
-      [
-        productId, mapped.wgcardsSkuId, mapped.skuName, mapped.faceValue, mapped.isCustomValue ? 1 : 0,
-        mapped.minFaceValue, mapped.maxFaceValue, mapped.costPrice, mapped.defaultSellingPrice, mapped.priceCurrency,
-      ]
-    );
-    await ensureInventoryRowConn(conn, result.insertId);
-    return result.insertId;
-  });
-}
 
 async function ensureInventoryRowConn(conn, skuId) {
   const existing = await conn.execute('SELECT inventory_id FROM inventory WHERE sku_id = ?', [skuId]);
@@ -269,12 +275,11 @@ async function ensureInventoryRowConn(conn, skuId) {
 }
 
 /** §9/§10's sku_supplier_links — kept in sync on every regular run for
- * anything actually catalogued (linked, backfilled, or a newly-added
- * denomination). NOT called from inside refreshSku/createSkuUnderProduct's
- * own transaction — upsertLink uses the shared pool (a different
- * connection), so calling it before that transaction commits would block
- * waiting on a lock the commit itself is what releases (a guaranteed
- * hang). Must always run AFTER that transaction's own commit. */
+ * anything actually catalogued (linked or backfilled). NOT called from
+ * inside refreshSku's own transaction — upsertLink uses the shared pool
+ * (a different connection), so calling it before that transaction commits
+ * would block waiting on a lock the commit itself is what releases (a
+ * guaranteed hang). Must always run AFTER that transaction's own commit. */
 async function linkSku(skuId, itemRaw, mapped) {
   await supplierLinksRepo.upsertLink({
     skuId,
@@ -311,43 +316,45 @@ async function stageSku(itemRaw, sku, mapped) {
   return wasAlreadyStaged ? 'staging_refreshed' : 'newly_staged';
 }
 
-/** Resolves one SKU to exactly one outcome, trying (in order): already
- * linked -> refresh; product_sku exists but its link is missing (a data
- * gap, not a new item) -> backfill the link; the item itself is already a
- * known product -> add this as a new denomination, no review; otherwise
- * -> stage (or skip, for Direct Top-Up) for admin review. */
-async function resolveOrStageSku(itemRaw, sku, mapped, existingProductId, isDirectTopUp, defaultMarginPercent) {
-  const existingLink = await supplierLinksRepo.getLinkBySupplierRef('wgcards', mapped.wgcardsSkuId);
-  if (existingLink) {
-    await refreshSku(existingLink.sku_id, mapped, defaultMarginPercent);
-    await linkSku(existingLink.sku_id, itemRaw, mapped);
-    return 'link_refreshed';
-  }
+/** Resolves one SKU to exactly one outcome. One product per WgCards SKU
+ * (migration 019) — so "already known" is now a per-SKU question, not a
+ * per-item one: whether THIS sku_id has a product_skus row already, not
+ * whether a sibling denomination of the same item does. Order: already
+ * catalogued (by wgcards_sku_id) -> refresh product+sku, labelled
+ * link_refreshed/link_backfilled depending on whether the sku_supplier_links
+ * row itself was also already there; otherwise -> stage (or skip, for
+ * Direct Top-Up / floating-denomination) for admin review. */
+async function resolveOrStageSku(itemRaw, sku, mapped, isDirectTopUp, defaultMarginPercent) {
+  const existingSkuRow = await db.queryOne(
+    'SELECT sku_id, product_id FROM product_skus WHERE wgcards_sku_id = ?',
+    [mapped.wgcardsSkuId]
+  );
 
-  const existingSkuRow = await db.queryOne('SELECT sku_id FROM product_skus WHERE wgcards_sku_id = ?', [mapped.wgcardsSkuId]);
   if (existingSkuRow) {
-    await refreshSku(existingSkuRow.sku_id, mapped, defaultMarginPercent);
+    const existingLink = await supplierLinksRepo.getLinkBySupplierRef('wgcards', mapped.wgcardsSkuId);
+    await refreshSku(existingSkuRow.sku_id, existingSkuRow.product_id, itemRaw, mapped, defaultMarginPercent);
     await linkSku(existingSkuRow.sku_id, itemRaw, mapped);
-    return 'link_backfilled';
+    return existingLink ? 'link_refreshed' : 'link_backfilled';
   }
 
-  if (existingProductId) {
-    const newSkuId = await createSkuUnderProduct(existingProductId, mapped);
-    await linkSku(newSkuId, itemRaw, mapped);
-    return 'sku_added';
-  }
-
+  // Never staged — same "would only ever be rejected, don't make it admin
+  // busywork" rationale for both: Direct Top-Up is out of scope entirely
+  // (client decision), and a floating/custom-value sku has no fixed price
+  // for checkout to charge at all (see migration 019's header).
   if (isDirectTopUp) return 'topup_skipped';
+  if (mapped.isCustomValue) return 'custom_value_skipped';
 
   return stageSku(itemRaw, sku, mapped);
 }
 
 async function syncOneItem(itemRaw, defaultMarginPercent) {
   const isDirectTopUp = Number(itemRaw.spuType) === DIRECT_TOPUP_SPU_TYPE;
-  const existingProductId = await findAndRefreshProduct(itemRaw);
 
   const skus = itemRaw.skus || itemRaw.skuList || [];
-  const outcomes = { link_refreshed: 0, link_backfilled: 0, sku_added: 0, newly_staged: 0, staging_refreshed: 0, topup_skipped: 0, skipped_no_price: 0 };
+  const outcomes = {
+    link_refreshed: 0, link_backfilled: 0, newly_staged: 0, staging_refreshed: 0,
+    topup_skipped: 0, custom_value_skipped: 0, skipped_no_price: 0,
+  };
   const errors = [];
 
   for (const sku of skus) {
@@ -364,7 +371,7 @@ async function syncOneItem(itemRaw, defaultMarginPercent) {
     }
 
     try {
-      const outcome = await resolveOrStageSku(itemRaw, sku, mapped, existingProductId, isDirectTopUp, defaultMarginPercent);
+      const outcome = await resolveOrStageSku(itemRaw, sku, mapped, isDirectTopUp, defaultMarginPercent);
       outcomes[outcome] = (outcomes[outcome] || 0) + 1;
     } catch (err) {
       // A single bad SKU must never take down the rest of this item's
@@ -389,8 +396,8 @@ async function run({ pageSize = PAGE_SIZE } = {}) {
   const defaultMarginPercent = await getDefaultMarginPercent();
   const summary = {
     itemsProcessed: 0,
-    linksRefreshed: 0, linksBackfilled: 0, skusAdded: 0,
-    newlyStaged: 0, stagingRefreshed: 0, topupSkipped: 0, skusSkipped: 0,
+    linksRefreshed: 0, linksBackfilled: 0,
+    newlyStaged: 0, stagingRefreshed: 0, topupSkipped: 0, customValueSkipped: 0, skusSkipped: 0,
     errors: [],
   };
 
@@ -430,10 +437,10 @@ async function run({ pageSize = PAGE_SIZE } = {}) {
         summary.itemsProcessed++;
         summary.linksRefreshed += result.outcomes.link_refreshed;
         summary.linksBackfilled += result.outcomes.link_backfilled;
-        summary.skusAdded += result.outcomes.sku_added;
         summary.newlyStaged += result.outcomes.newly_staged;
         summary.stagingRefreshed += result.outcomes.staging_refreshed;
         summary.topupSkipped += result.outcomes.topup_skipped;
+        summary.customValueSkipped += result.outcomes.custom_value_skipped;
         summary.skusSkipped += result.outcomes.skipped_no_price;
         summary.errors.push(...result.errors);
       } catch (err) {
@@ -448,14 +455,15 @@ async function run({ pageSize = PAGE_SIZE } = {}) {
 
   logger.info(
     `catalogSync: ${summary.itemsProcessed} item(s) processed — ${summary.linksRefreshed} link(s) refreshed, ` +
-    `${summary.linksBackfilled} link(s) backfilled, ${summary.skusAdded} new denomination(s) added, ` +
+    `${summary.linksBackfilled} link(s) backfilled, ` +
     `${summary.newlyStaged} newly staged for review, ${summary.stagingRefreshed} staged item(s) refreshed, ` +
-    `${summary.topupSkipped} direct top-up sku(s) skipped, ${summary.errors.length} error(s)`
+    `${summary.topupSkipped} direct top-up sku(s) skipped, ${summary.customValueSkipped} custom-value sku(s) skipped, ` +
+    `${summary.errors.length} error(s)`
   );
   return summary;
 }
 
-module.exports = { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, buildMatchKey, syncOneItem };
+module.exports = { run, mapFaceValue, computeDefaultSellingPrice, mapSkuForUpsert, composeProductName, buildMatchKey, syncOneItem };
 
 // ── CLI entry point ─────────────────────────────────────────────────────
 if (require.main === module) {
